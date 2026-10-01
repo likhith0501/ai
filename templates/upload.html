@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block content %}
+<div class="pt-4">
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb small">
+      <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Upload Dataset</li>
+    </ol>
+  </nav>
+
+  <h3 class="mb-1">&#8682; Upload Traffic Dataset</h3>
+  <p class="lead-muted">
+    Upload a CSV flow table. Column names are mapped automatically, so datasets such as
+    CICIDS2017, UNSW-NB15 or a custom export work without modification.
+  </p>
+
+  {% if error %}
+  <div class="alert-cyber mt-3">{{ error }}</div>
+  {% endif %}
+
+  {% if not model_available %}
+  <div class="alert-cyber mt-3">
+    {{ model_error }} <br>Run <span class="mono">python training/train.py</span> and restart the server.
+  </div>
+  {% endif %}
+
+  <div class="row g-3 mt-1">
+    <div class="col-lg-6">
+      <div class="panel">
+        <div class="section-title mb-3">&#128228; Select CSV file</div>
+        <form method="post" enctype="multipart/form-data" id="uploadForm" action="{{ url_for('upload') }}">
+          <div class="drop-zone" id="dropZone">
+            <div style="font-size:2rem">&#128196;</div>
+            <div class="fw-semibold mt-1">Drag &amp; drop a CSV file here</div>
+            <div class="text-secondary small">or click to browse &middot; maximum {{ config.MAX_CONTENT_LENGTH // (1024*1024) }} MB</div>
+            <input class="d-none" type="file" name="dataset" id="datasetInput" accept=".csv,text/csv" required>
+          </div>
+          <div class="d-flex justify-content-between align-items-center mt-3">
+            <span class="text-secondary small" id="fileName">No file selected</span>
+            <button class="btn btn-cyber btn-accent" type="submit">Inspect Dataset</button>
+          </div>
+        </form>
+
+        {% if sample_available %}
+        <hr class="my-3" style="border-color: var(--border);">
+        <form method="post" action="{{ url_for('predict') }}">
+          <input type="hidden" name="stored_filename" value="sample_dataset.csv">
+          <button class="btn btn-cyber btn-ghost w-100" type="submit">
+            &#9889; Analyse the bundled sample dataset (data/traffic_dataset.csv)
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="panel">
+        <div class="section-title mb-3">&#128269; Dataset preview</div>
+        {% if preview %}
+        <div class="row g-2 mb-3">
+          <div class="col-6"><div class="panel panel-tight"><div class="stat-label">File name</div>
+            <div class="fw-semibold text-truncate">{{ stored_filename }}</div></div></div>
+          <div class="col-6"><div class="panel panel-tight"><div class="stat-label">Rows</div>
+            <div class="stat-value stat-accent" style="font-size:1.3rem">{{ '{:,}'.format(preview.rows) }}</div></div></div>
+          <div class="col-6"><div class="panel panel-tight"><div class="stat-label">Columns</div>
+            <div class="stat-value stat-purple" style="font-size:1.3rem">{{ preview.columns }}</div></div></div>
+          <div class="col-6"><div class="panel panel-tight"><div class="stat-label">Missing values</div>
+            <div class="stat-value stat-warning" style="font-size:1.3rem">{{ '{:,}'.format(preview.missing_values) }}</div></div></div>
+          <div class="col-6"><div class="panel panel-tight"><div class="stat-label">Duplicate rows</div>
+            <div class="stat-value stat-warning" style="font-size:1.3rem">{{ preview.duplicate_rows }}</div></div></div>
+          <div class="col-6"><div class="panel panel-tight"><div class="stat-label">Unidirectional flows</div>
+            <div class="stat-value stat-accent" style="font-size:1.3rem">{{ '{:,}'.format(preview.unidirectional_records) }}</div></div></div>
+        </div>
+
+        <div class="mb-2">
+          <div class="stat-label mb-1">Detected features ({{ preview.feature_columns | length }})</div>
+          <div class="d-flex flex-wrap gap-1">
+            {% for column in preview.feature_columns %}<span class="badge-soft badge-accent">{{ column }}</span>{% endfor %}
+          </div>
+        </div>
+
+        {% if preview.label_column %}
+        <div class="mt-3">
+          <div class="stat-label mb-1">Target column: <span class="mono">{{ preview.label_column }}</span></div>
+          <div class="d-flex flex-wrap gap-1">
+            {% for label in preview.classes %}<span class="badge-soft badge-unknown">{{ label }}</span>{% endfor %}
+          </div>
+        </div>
+        {% else %}
+        <div class="alert-info mt-3 mb-0">
+          No label column detected. Records will be classified only &mdash; no ground-truth accuracy is reported.
+        </div>
+        {% endif %}
+
+        {% if preview.unmapped_columns %}
+        <div class="mt-3">
+          <div class="stat-label mb-1">Ignored columns</div>
+          <div class="text-secondary small mono">{{ preview.unmapped_columns | join(', ') }}</div>
+        </div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('predict') }}" class="mt-3">
+          <input type="hidden" name="stored_filename" value="{{ stored_filename }}">
+          <input type="hidden" name="original_filename" value="{{ stored_filename }}">
+          <button class="btn btn-cyber btn-accent w-100" type="submit">Analyze Traffic</button>
+        </form>
+        {% else %}
+        <p class="text-secondary small mb-0">
+          Upload a dataset to see the detected columns, missing values and unidirectional flow count
+          before running the detector.
+        </p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel mt-3">
+    <div class="section-title mb-2">Expected columns</div>
+    <p class="text-secondary small mb-2">
+      Missing columns are tolerated &mdash; the loader maps aliases such as <span class="mono">Src IP</span>,
+      <span class="mono">Dst Port</span>, <span class="mono">Total Length</span> or <span class="mono">Flow Duration</span>
+      onto canonical names. At least one label-like column (Label, Class, Attack, Category) is required for training.
+    </p>
+    <div class="d-flex flex-wrap gap-1">
+      {% for column in ['Flow_ID','Source_IP','Destination_IP','Source_Port','Destination_Port','Protocol',
+                        'Protocol_Type','Packet_Count','Byte_Count','Packet_Length','Flow_Duration',
+                        'Forward_Packets','Forward_Bytes','Reverse_Packets','Reverse_Bytes','TCP_Flags',
+                        'Inter_Arrival_Time','Label'] %}
+      <span class="badge-soft badge-unknown">{{ column }}</span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

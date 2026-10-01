@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="pt-5 pb-4">
+  <div class="panel mx-auto" style="max-width: 720px;">
+    <div class="text-center mb-3" style="font-size:3rem">&#128683;</div>
+    <h4 class="text-center mb-2">{{ title | default('Error') }}</h4>
+    <div class="alert-cyber">{{ message }}</div>
+    {% if status == 503 %}
+    <div class="alert-info mt-3">
+      The detector has no trained model yet. Run <span class="mono">python training/train.py</span>
+      in the project folder, then reload this page.
+    </div>
+    {% endif %}
+    <div class="d-flex flex-wrap gap-2 justify-content-center mt-4">
+      <a class="btn btn-cyber btn-accent" href="{{ url_for('dashboard') }}">Go to dashboard</a>
+      <a class="btn btn-cyber btn-ghost" href="{{ url_for('upload') }}">Upload a dataset</a>
+      <a class="btn btn-cyber btn-ghost" href="{{ url_for('index') }}">Home</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

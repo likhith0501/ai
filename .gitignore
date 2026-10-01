@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Generated model artifacts and reports (recreate with training/train.py)
+models/*.pkl
+models/metadata.json
+reports/*.csv
+
+# Runtime data (recreate with data/make_sample_dataset.py)
+data/traffic_dataset.csv
+
+# Runtime state
+database/*.db
+uploads/*
+!uploads/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

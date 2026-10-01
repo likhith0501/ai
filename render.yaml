@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: cyber-threat-detection
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt && python data/make_sample_dataset.py && python training/train.py
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180 --preload --access-logfile - app:app
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: CYBER_THREAT_SECRET_KEY
+        generateValue: true
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: MAX_UPLOAD_MB
+        value: "32"
+      - key: APP_DATA_DIR
+        value: "/var/data"
+    disk:
+      name: threat-data
+      mountPath: /var/data
+      sizeGB: 1

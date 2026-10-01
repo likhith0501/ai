@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block content %}
+<div class="pt-4">
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb small">
+      <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Detection Results</li>
+    </ol>
+  </nav>
+
+  <div class="d-flex flex-wrap justify-content-between align-items-end gap-2">
+    <div>
+      <h3 class="mb-1">&#128100; Detection Results</h3>
+      <div class="text-secondary small">
+        Analysis #{{ upload.id }} &middot; {{ upload.filename }} &middot;
+        {{ upload.upload_time.strftime('%Y-%m-%d %H:%M') }} UTC &middot;
+        model <strong>{{ upload.model_name }}</strong>
+        {% if summary.model_name %} &middot; threshold {{ summary.threshold }}{% endif %}
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-cyber btn-ghost" href="{{ url_for('live', upload_id=upload.id) }}">&#9673; Simulate live</a>
+      {% if upload.report_file %}
+      <a class="btn btn-cyber btn-accent" href="{{ url_for('download', filename=upload.report_file) }}">&#11015; Download prediction CSV</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="row g-3 mt-1">
+    <div class="col-6 col-lg"> {{ ui.stat_card('Total Traffic Records', '{:,}'.format(chart_payload.total_records), '&#128230;', 'stat-accent') }} </div>
+    <div class="col-6 col-lg"> {{ ui.stat_card('Normal Traffic', '{:,}'.format(chart_payload.normal), '&#9989;', 'stat-normal') }} </div>
+    <div class="col-6 col-lg"> {{ ui.stat_card('Malicious Traffic', '{:,}'.format(chart_payload.malicious), '&#128680;', 'stat-malicious') }} </div>
+    <div class="col-6 col-lg"> {{ ui.stat_card('Threat Percentage', '%.2f%%'|format(chart_payload.threat_percentage), '&#9888;', 'stat-purple') }} </div>
+    <div class="col-12 col-lg"> {{ ui.stat_card('Unidirectional Traffic', '{:,}'.format(chart_payload.unidirectional), '&#8594;', 'stat-warning') }} </div>
+  </div>
+
+  {% if summary.warnings %}
+  <div class="alert-info mt-3">
+    {% for warning in summary.warnings %}<div>{{ warning }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if chart_payload.ground_truth_accuracy is not none %}
+  <div class="panel mt-3">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div>
+        <div class="stat-label">Verified accuracy on this dataset</div>
+        <div class="stat-value stat-normal" style="font-size:1.5rem">{{ '%.2f'|format(chart_payload.ground_truth_accuracy) }}%</div>
+      </div>
+      <div class="text-secondary small" style="max-width:52ch">
+        The uploaded file contains a ground-truth label column, so predictions were compared against it.
+        Confusion matrix (rows = actual, columns = predicted):
+        {% if chart_payload.confusion_matrix %}
+        <span class="mono">normal/normal {{ chart_payload.confusion_matrix[0][0] }}, normal/malicious {{ chart_payload.confusion_matrix[0][1] }},
+        malicious/normal {{ chart_payload.confusion_matrix[1][0] }}, malicious/malicious {{ chart_payload.confusion_matrix[1][1] }}</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="row g-3 mt-1">
+    <div class="col-lg-4"> {{ ui.chart_panel('Normal vs Malicious', 'chartNormalMalicious', 'Binary verdict per record') }} </div>
+    <div class="col-lg-4"> {{ ui.chart_panel('Attack Distribution', 'chartAttackTypes', 'Attack categories predicted as malicious') }} </div>
+    <div class="col-lg-4"> {{ ui.chart_panel('Protocol Distribution', 'chartProtocols', 'Transport protocols observed') }} </div>
+  </div>
+  <div class="row g-3 mt-1">
+    <div class="col-lg-6"> {{ ui.chart_panel('Traffic Direction', 'chartDirection', 'Unidirectional flows highlighted') }} </div>
+    <div class="col-lg-6"> {{ ui.chart_panel('Threat Probability Distribution', 'chartProbability', 'Confidence buckets') }} </div>
+  </div>
+
+  <div class="panel mt-3">
+    <div class="section-title mb-3">&#128196; Classified Traffic Records</div>
+    {% if chart_payload.table.rows %}
+    <div class="table-responsive" style="max-height: 460px; overflow-y: auto;">
+      <table class="table table-cyber">
+        <thead>
+          <tr>
+            {% for column in chart_payload.table.columns %}<th>{{ column }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in chart_payload.table.rows %}
+          <tr>
+            {% for column in chart_payload.table.columns %}
+              {% if column == 'Prediction' %}
+                <td>{{ ui.badge_for(row[column]) }}</td>
+              {% elif column == 'Threat Probability' %}
+                <td class="numeric">{{ '%.2f'|format(row[column] or 0) }}%</td>
+              {% else %}
+                <td class="{% if 'IP' in column %}mono{% endif %}">{{ row[column] }}</td>
+              {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="text-secondary small mt-2">Showing the first {{ chart_payload.table.rows | length }} classified records.</div>
+    {% else %}
+    <p class="text-secondary small mb-0">No stored predictions for this analysis.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel mt-3">
+    <div class="section-title mb-2">&#128203; Report metadata</div>
+    <div class="row g-3 small">
+      <div class="col-md-6">
+        <ul class="list-plain">
+          <li>Source file: <span class="mono">{{ upload.filename }}</span></li>
+          <li>Total records analysed: {{ '{:,}'.format(upload.total_records) }}</li>
+          <li>Unidirectional flows: {{ '{:,}'.format(upload.unidirectional_records) }}</li>
+          <li>Bidirectional flows: {{ '{:,}'.format(chart_payload.bidirectional) }}</li>
+        </ul>
+      </div>
+      <div class="col-md-6">
+        <ul class="list-plain">
+          <li>Model used: {{ upload.model_name }}</li>
+          <li>Decision threshold: {{ summary.threshold | default(0.5) }}</li>
+          <li>Attack categories found: {{ (chart_payload.attack_types | length) }}</li>
+          <li>Generated: {{ upload.upload_time.strftime('%Y-%m-%d %H:%M:%S') }} UTC</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id="chart-data" type="application/json">{{ chart_payload | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script>window.CYBER_CHARTS = ['chartNormalMalicious','chartAttackTypes','chartProtocols','chartDirection','chartProbability'];</script>
+{% endblock %}

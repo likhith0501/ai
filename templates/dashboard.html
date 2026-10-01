@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block content %}
+<div class="pt-4 d-flex flex-wrap justify-content-between align-items-end gap-2">
+  <div>
+    <h3 class="mb-1">&#128737; AI Threat Detection &middot; Dashboard</h3>
+    <div class="text-secondary small">
+      {% if has_upload %}
+        Analysis #{{ upload.id }} &middot; {{ upload.filename }} &middot;
+        {{ upload.upload_time.strftime('%Y-%m-%d %H:%M') }} UTC &middot; model: <strong>{{ upload.model_name }}</strong>
+      {% else %}
+        Training dataset summary &middot; {{ metadata.dataset_name | default('no dataset') }}
+        {% if metadata.generated_at %}&middot; trained {{ metadata.generated_at[:19]|replace('T', ' ') }}{% endif %}
+      {% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-cyber btn-ghost" href="{{ url_for('upload') }}">&#8682; Upload Dataset</a>
+    <a class="btn btn-cyber btn-accent" href="{{ url_for('live') }}">&#9673; Live Simulation</a>
+  </div>
+</div>
+
+{% if not has_upload %}
+<div class="alert-info mt-3">
+  No dataset has been analysed through the web interface yet, so the cards below summarise the
+  <strong>training dataset</strong> used by the current model. Upload a CSV to replace them with live
+  detection results.
+</div>
+{% endif %}
+
+<div class="row g-3 mt-1">
+  <div class="col-6 col-lg"> {{ ui.stat_card('Total Traffic', '{:,}'.format(chart_payload.total_records), '&#128230;', 'stat-accent') }} </div>
+  <div class="col-6 col-lg"> {{ ui.stat_card('Normal Traffic', '{:,}'.format(chart_payload.normal), '&#9989;', 'stat-normal') }} </div>
+  <div class="col-6 col-lg"> {{ ui.stat_card('Malicious Traffic', '{:,}'.format(chart_payload.malicious), '&#128680;', 'stat-malicious') }} </div>
+  <div class="col-6 col-lg"> {{ ui.stat_card('Unidirectional Traffic', '{:,}'.format(chart_payload.unidirectional), '&#8594;', 'stat-warning') }} </div>
+  <div class="col-12 col-lg"> {{ ui.stat_card('Threat Rate', '%.2f%%'|format(chart_payload.threat_percentage), '&#9888;', 'stat-purple') }} </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-4"> {{ ui.chart_panel('Normal vs Malicious Traffic', 'chartNormalMalicious', 'Binary verdict per flow') }} </div>
+  <div class="col-lg-4"> {{ ui.chart_panel('Attack Type Distribution', 'chartAttackTypes', 'Categories detected in the dataset') }} </div>
+  <div class="col-lg-4"> {{ ui.chart_panel('Protocol Distribution', 'chartProtocols', 'Transport protocol mix') }} </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-4"> {{ ui.chart_panel('Traffic Direction Distribution', 'chartDirection', 'FORWARD / REVERSE / UNIDIRECTIONAL') }} </div>
+  <div class="col-lg-4"> {{ ui.chart_panel('Threat Probability Distribution', 'chartProbability', 'Model confidence per record') }} </div>
+  <div class="col-lg-4"> {{ ui.chart_panel('Model Performance Comparison', 'chartModels', 'Hold-out metrics for every trained model') }} </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-7">
+    <div class="panel h-100">
+      <div class="section-title mb-3">&#128196; Top Talkers</div>
+      {% if chart_payload.top_sources %}
+      <div class="table-responsive">
+        <table class="table table-cyber">
+          <thead><tr><th>Source</th><th class="numeric">Records</th><th style="width:55%">Share</th></tr></thead>
+          <tbody>
+            {% set top_value = chart_payload.top_sources[0].records %}
+            {% for source in chart_payload.top_sources %}
+            <tr>
+              <td class="mono">{{ source.source }}</td>
+              <td class="numeric">{{ source.records }}</td>
+              <td><div class="progress-track"><div class="progress-fill" style="width: {{ (source.records / top_value * 100)|round(1) }}%; background: linear-gradient(90deg,#22d3ee,#a78bfa);"></div></div></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-secondary small mb-0">Upload a dataset to populate the top-talkers list.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="panel h-100">
+      <div class="section-title mb-3">&#129302; Active Model</div>
+      <ul class="list-plain">
+        <li>Selected model: <strong>{{ chart_payload.model_name or metadata.best_model or 'n/a' }}</strong></li>
+        <li>Trained features: <strong>{{ metadata.feature_columns | length if metadata.feature_columns else 0 }}</strong></li>
+        <li>Classes detected: <strong>{{ (metadata.class_names | length) if metadata.class_names else 0 }}</strong></li>
+        <li>Decision threshold: <strong>{{ metadata.threshold | default(0.5) }}</strong></li>
+        <li>XGBoost available: <strong>{{ 'yes' if metadata.xgboost_available else 'no' }}</strong></li>
+        <li>SHAP available: <strong>{{ 'yes' if metadata.shap_available else 'no (optional)' }}</strong></li>
+      </ul>
+      <a class="btn btn-cyber btn-ghost btn-sm mt-3" href="{{ url_for('metrics') }}">View full evaluation report</a>
+    </div>
+  </div>
+</div>
+
+{% if recent_uploads %}
+<div class="panel mt-3">
+  <div class="section-title mb-3">&#128100; Prediction History</div>
+  <div class="table-responsive">
+    <table class="table table-cyber">
+      <thead><tr><th>ID</th><th>File</th><th>Uploaded (UTC)</th><th class="numeric">Records</th>
+        <th class="numeric">Normal</th><th class="numeric">Malicious</th><th class="numeric">Unidirectional</th>
+        <th class="numeric">Threat %</th><th>Model</th><th></th></tr></thead>
+      <tbody>
+        {% for item in recent_uploads %}
+        <tr>
+          <td>#{{ item.id }}</td>
+          <td>{{ item.filename }}</td>
+          <td>{{ item.upload_time.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="numeric">{{ '{:,}'.format(item.total_records) }}</td>
+          <td class="numeric stat-normal">{{ '{:,}'.format(item.normal_records) }}</td>
+          <td class="numeric stat-malicious">{{ '{:,}'.format(item.malicious_records) }}</td>
+          <td class="numeric stat-warning">{{ '{:,}'.format(item.unidirectional_records) }}</td>
+          <td class="numeric">{{ '%.2f'|format(item.threat_percentage or 0) }}%</td>
+          <td>{{ item.model_name }}</td>
+          <td><a class="btn btn-sm btn-ghost" href="{{ url_for('results', upload_id=item.id) }}">Results</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<script id="chart-data" type="application/json">{{ chart_payload | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script>window.CYBER_CHARTS = ['chartNormalMalicious','chartAttackTypes','chartProtocols','chartDirection','chartProbability','chartModels'];</script>
+{% endblock %}

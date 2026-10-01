@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block content %}
+<div class="pt-4">
+  <h3 class="mb-1">&#129351; Model Performance</h3>
+  <p class="lead-muted">
+    Every metric below is computed by <span class="mono">training/train.py</span> on a stratified
+    hold-out split. No value is hard-coded.
+  </p>
+
+  {% if not metadata_ready %}
+  <div class="alert-cyber mt-3">
+    No training metadata found. Run <span class="mono">python training/train.py</span> to train the
+    models and populate this page.
+  </div>
+  {% else %}
+
+  <div class="row g-3 mt-1">
+    <div class="col-6 col-lg"> {{ ui.stat_card('Best Model', metadata.best_model, '&#127942;', 'stat-accent') }} </div>
+    <div class="col-6 col-lg"> {{ ui.stat_card('Trained On', metadata.dataset_name, '&#128193;', 'stat-purple') }} </div>
+    <div class="col-6 col-lg"> {{ ui.stat_card('Train / Test', metadata.train_records ~ ' / ' ~ metadata.test_records, '&#128200;', 'stat-normal') }} </div>
+    <div class="col-12 col-lg"> {{ ui.stat_card('Features Used', metadata.feature_columns | length, '&#128203;', 'stat-warning') }} </div>
+  </div>
+
+  <div class="panel mt-3">
+    <div class="section-title mb-3">&#128202; Metric comparison</div>
+    <div class="table-responsive">
+      <table class="table table-cyber">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th class="numeric">Accuracy</th>
+            <th class="numeric">Precision</th>
+            <th class="numeric">Recall</th>
+            <th class="numeric">F1</th>
+            <th class="numeric">ROC-AUC</th>
+            <th class="numeric">Train time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for record in metadata.models %}
+          <tr {% if record.model_name == metadata.best_model %}style="background: rgba(34,211,238,0.08);"{% endif %}>
+            <td>
+              {% if record.model_name == metadata.best_model %}
+                <span class="badge-soft badge-accent">best</span>
+              {% endif %}
+              {{ record.model_name }}
+            </td>
+            <td class="numeric">{{ '%.4f'|format(record.accuracy) if record.accuracy is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.precision) if record.precision is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.recall) if record.recall is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.f1_score) if record.f1_score is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.roc_auc) if record.roc_auc is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.2f'|format(record.train_seconds) if record.train_seconds else 'n/a' }}s</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="alert-info mt-3 mb-0">
+      <strong>Model selection:</strong> the deployed model maximises the mean of F1-score and ROC-AUC,
+      not accuracy alone, so a strong recall on the rare attack class is preserved.
+      Imbalance handling: {{ metadata.imbalance_strategy }}
+    </div>
+  </div>
+
+  <div class="panel mt-3">
+    <div class="section-title mb-3">&#128200; Metric detail of the best model ({{ metadata.best_model }})</div>
+    {% set best = metadata.models | selectattr('model_name', 'equalto', metadata.best_model) | first %}
+    {% if best %}
+    <div class="row g-3">
+      <div class="col-md-6">
+        {{ ui.progress_bar('Accuracy', best.accuracy, 'var(--accent)') }}
+        {{ ui.progress_bar('Precision', best.precision, 'var(--accent-2)') }}
+        {{ ui.progress_bar('Recall', best.recall, 'var(--normal)') }}
+        {{ ui.progress_bar('F1-score', best.f1_score, 'var(--warning)') }}
+        {{ ui.progress_bar('ROC-AUC', best.roc_auc, 'var(--malicious)') }}
+      </div>
+      <div class="col-md-6">
+        {% if best.confusion_matrix %}
+        <div class="stat-label mb-2">Confusion matrix (rows = actual, columns = predicted)</div>
+        <div class="table-responsive">
+          <table class="table table-cyber">
+            <thead><tr><th></th><th class="numeric">Pred: Normal</th><th class="numeric">Pred: Attack</th></tr></thead>
+            <tbody>
+              {% for row in best.confusion_matrix %}
+              <tr>
+                <td>{{ 'Actual: Normal' if loop.index0 == 0 else 'Actual: Attack' }}</td>
+                {% for value in row %}<td class="numeric">{{ value }}</td>{% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+        {% if best.classification_report %}
+        <div class="stat-label mb-1 mt-3">Classification report</div>
+        <div class="table-responsive">
+          <table class="table table-cyber">
+            <thead><tr><th>Class</th><th class="numeric">Precision</th><th class="numeric">Recall</th>
+              <th class="numeric">F1</th><th class="numeric">Support</th></tr></thead>
+            <tbody>
+              {% for class_name, values in best.classification_report.items() if class_name not in ['accuracy', 'macro avg', 'weighted avg'] %}
+              <tr>
+                <td>{{ class_name }}</td>
+                <td class="numeric">{{ '%.4f'|format(values.precision) }}</td>
+                <td class="numeric">{{ '%.4f'|format(values.recall) }}</td>
+                <td class="numeric">{{ '%.4f'|format(values['f1-score']) }}</td>
+                <td class="numeric">{{ values.support }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if metadata.comparison_image %}
+  <div class="panel mt-3">
+    <div class="section-title mb-3">&#128202; Visual comparison</div>
+    <img class="chart-image" src="{{ url_for('static', filename='images/generated/' ~ metadata.comparison_image) }}" alt="Model comparison chart">
+  </div>
+  {% endif %}
+
+  <div class="panel mt-3">
+    <div class="section-title mb-3">&#128721; Confusion matrices</div>
+    <div class="row g-3">
+      {% for model_name, image in metadata.confusion_images.items() %}
+      <div class="col-md-6 col-xl-4">
+        <div class="small text-secondary mb-1">{{ model_name }}</div>
+        <img class="chart-image" src="{{ url_for('static', filename='images/generated/' ~ image) }}" alt="{{ model_name }} confusion matrix">
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if metadata.roc_images %}
+  <div class="panel mt-3">
+    <div class="section-title mb-3">&#128200; ROC curves</div>
+    <div class="row g-3">
+      {% for model_name, image in metadata.roc_images.items() %}
+      <div class="col-md-6 col-xl-4">
+        <div class="small text-secondary mb-1">{{ model_name }}</div>
+        <img class="chart-image" src="{{ url_for('static', filename='images/generated/' ~ image) }}" alt="{{ model_name }} ROC curve">
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="row g-3 mt-1">
+    <div class="col-lg-5">
+      <div class="panel h-100">
+        <div class="section-title mb-3">&#129522; Feature importance</div>
+        <div class="text-secondary small mb-2">
+          {{ metadata.feature_importance_method }} &middot; model: {{ metadata.best_model }}
+        </div>
+        {% for item in metadata.feature_importance %}
+        <div class="metric-bar-row">
+          <div class="metric-bar-label"><span class="mono">{{ loop.index }}. {{ item.feature }}</span>
+            <span>{{ '%.4f'|format(item.importance) }} ({{ '%.1f'|format(item.importance_pct) }}%)</span></div>
+          <div class="progress-track"><div class="progress-fill" style="width: {{ [item.importance_pct, 100]|min }}%; background: linear-gradient(90deg,#22d3ee,#a78bfa);"></div></div>
+        </div>
+        {% endfor %}
+
+        {% if metadata.shap and metadata.shap.available %}
+        <div class="stat-label mt-3 mb-1">SHAP mean |value| (optional)</div>
+        {% for item in metadata.shap.mean_abs_shap %}
+        <div class="d-flex justify-content-between small"><span class="mono">{{ item.feature }}</span><span>{{ '%.4f'|format(item.value) }}</span></div>
+        {% endfor %}
+        {% elif not metadata.shap_available %}
+        <div class="text-secondary small mt-3">
+          SHAP is not installed. Feature importance above uses the native method of the trained estimator.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="panel h-100">
+        <div class="section-title mb-3">&#128190; Features used for training ({{ metadata.feature_columns | length }})</div>
+        <div class="d-flex flex-wrap gap-1 mb-3">
+          {% for column in metadata.feature_columns %}
+          <span class="badge-soft {% if column in metadata.numeric_features %}badge-accent{% else %}badge-unknown{% endif %}">{{ column }}</span>
+          {% endfor %}
+        </div>
+        <div class="row g-3 small">
+          <div class="col-md-6">
+            <div class="stat-label mb-1">Numeric ({{ metadata.numeric_features | length }})</div>
+            <div class="mono text-secondary">{{ metadata.numeric_features | join(', ') }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="stat-label mb-1">Categorical ({{ metadata.categorical_features | length }})</div>
+            <div class="mono text-secondary">{{ metadata.categorical_features | join(', ') }}</div>
+          </div>
+        </div>
+        {% if metadata.unmapped_columns %}
+        <div class="mt-3">
+          <div class="stat-label mb-1">Columns ignored</div>
+          <div class="mono text-secondary small">{{ metadata.unmapped_columns | join(', ') }}</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+{% if metadata.attack_classifier and metadata.attack_classifier.available %}
+  <div class="panel mt-3">
+    <div class="section-title mb-3">&#127919; Attack type classifier</div>
+    {% if metadata.attack_classifier.reused_binary_model %}
+    <div class="alert-info">
+      The training dataset is binary ({{ metadata.attack_classifier.classes | join(' vs ') }}), so attack typing
+      reuses the selected binary model instead of training a separate multiclass model.
+      Class balance of the training set:
+      {% for label, count in metadata.attack_distribution.items() %}{{ label }} = {{ '{:,}'.format(count) }} {% endfor %}
+    </div>
+    {% else %}
+    <div class="row g-3">
+      <div class="col-md-6">
+        <ul class="list-plain">
+          {% for label, count in metadata.attack_distribution.items() %}
+          <li>{{ label }}: <strong>{{ '{:,}'.format(count) }}</strong> records</li>
+          {% endfor %}
+        </ul>
+        <div class="mt-3">
+          {{ ui.progress_bar('Accuracy', metadata.attack_classifier.metrics.accuracy, 'var(--accent-2)') }}
+          {{ ui.progress_bar('Weighted precision', metadata.attack_classifier.metrics.precision, 'var(--accent)') }}
+          {{ ui.progress_bar('Weighted recall', metadata.attack_classifier.metrics.recall, 'var(--normal)') }}
+          {{ ui.progress_bar('Weighted F1', metadata.attack_classifier.metrics.f1_score, 'var(--warning)') }}
+          {{ ui.progress_bar('Macro ROC-AUC', metadata.attack_classifier.metrics.roc_auc, 'var(--malicious)') }}
+        </div>
+      </div>
+      <div class="col-md-6">
+        {% if metadata.attack_classifier.confusion_matrix_image %}
+        <img class="chart-image" src="{{ url_for('static', filename='images/generated/' ~ metadata.attack_classifier.confusion_matrix_image) }}" alt="Attack type confusion matrix">
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if stored_metrics %}
+  <div class="panel mt-3">
+    <div class="section-title mb-2">&#128190; Metrics stored in SQLite (model_metrics)</div>
+    <div class="table-responsive">
+      <table class="table table-cyber">
+        <thead><tr><th>Model</th><th class="numeric">Accuracy</th><th class="numeric">Precision</th>
+          <th class="numeric">Recall</th><th class="numeric">F1</th><th class="numeric">ROC-AUC</th></tr></thead>
+        <tbody>
+          {% for record in stored_metrics %}
+          <tr>
+            <td>{{ record.model_name }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.accuracy) if record.accuracy is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.precision) if record.precision is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.recall) if record.recall is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.f1_score) if record.f1_score is not none else 'n/a' }}</td>
+            <td class="numeric">{{ '%.4f'|format(record.roc_auc) if record.roc_auc is not none else 'n/a' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

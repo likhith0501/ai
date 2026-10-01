@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="pt-4">
+  <h3 class="mb-1">&#8505; About the Project</h3>
+  <p class="lead-muted">
+    AI-Based Detection of Cyber Threats in Unidirectional IP Traffic &mdash; an end-to-end machine
+    learning pipeline that classifies network flows as normal or malicious, highlights unidirectional
+    communication and exposes the results through a cybersecurity dashboard.
+  </p>
+
+  <div class="row g-3 mt-1">
+    <div class="col-lg-6">
+      <div class="panel h-100">
+        <div class="section-title mb-2">&#128100; Problem statement</div>
+        <p class="text-secondary small">
+          Networks produce large amounts of flow data. Attacks that are almost entirely one-way
+          (single-host denial of service, outbound beaconing, scanning, data exfiltration) are hard to
+          spot with signature based tools because no reply traffic exists. Statistical learning over
+          flow features generalises these patterns and flags suspicious flows automatically.
+        </p>
+        <div class="section-title mb-2 mt-3">&#127919; Objectives</div>
+        <ul class="list-plain small">
+          <li>Accept CSV traffic datasets with flexible column naming</li>
+          <li>Clean, encode and scale data without train/test leakage</li>
+          <li>Derive a <span class="mono">traffic_direction</span> feature and count unidirectional flows</li>
+          <li>Compare several classifiers using accuracy, precision, recall, F1 and ROC-AUC</li>
+          <li>Score new uploads through a web dashboard and a JSON API</li>
+          <li>Persist uploads, predictions and model metrics in SQLite</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="panel h-100">
+        <div class="section-title mb-2">&#128737; Detection workflow</div>
+        <div class="workflow-step">Dataset upload</div>
+        <div class="workflow-step">Dataset validation</div>
+        <div class="workflow-step">Data cleaning</div>
+        <div class="workflow-step">Feature extraction</div>
+        <div class="workflow-step active">Unidirectional traffic identification</div>
+        <div class="workflow-step">Feature encoding</div>
+        <div class="workflow-step">Feature scaling</div>
+        <div class="workflow-step">ML model inference</div>
+        <div class="workflow-step">Threat prediction &amp; probability</div>
+        <div class="workflow-step">Dashboard + SQLite storage + CSV report</div>
+
+        <div class="section-title mb-2 mt-3">&#128202; Technology</div>
+        <div class="d-flex flex-wrap gap-1">
+          {% for tech in ['Python', 'Flask', 'Flask-SQLAlchemy', 'Pandas', 'NumPy', 'Scikit-learn',
+                           'XGBoost', 'Joblib', 'Matplotlib', 'Seaborn', 'Bootstrap 5', 'Chart.js', 'SQLite'] %}
+          <span class="badge-soft badge-accent">{{ tech }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mt-1">
+    <div class="col-lg-6">
+      <div class="panel h-100">
+        <div class="section-title mb-2">&#128196; API documentation</div>
+        <div class="stat-label mb-1">POST /api/predict &mdash; multipart form field <span class="mono">dataset</span></div>
+        <pre class="code-block">{{ api_examples.curl }}</pre>
+        <div class="stat-label mb-1 mt-3">Response</div>
+        <pre class="code-block">{{ api_examples.response }}</pre>
+        <div class="stat-label mb-1 mt-3">Other endpoints</div>
+        <div class="table-responsive">
+          <table class="table table-cyber">
+            <thead><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td>GET</td><td class="mono">/</td><td>Home page</td></tr>
+              <tr><td>GET</td><td class="mono">/dashboard</td><td>Cybersecurity dashboard</td></tr>
+              <tr><td>GET</td><td class="mono">/upload</td><td>Upload form</td></tr>
+              <tr><td>POST</td><td class="mono">/predict</td><td>Analyse a dataset</td></tr>
+              <tr><td>GET</td><td class="mono">/results/&lt;id&gt;</td><td>Detection results</td></tr>
+              <tr><td>GET</td><td class="mono">/metrics</td><td>Model performance</td></tr>
+              <tr><td>GET</td><td class="mono">/download/&lt;file&gt;</td><td>Prediction CSV</td></tr>
+              <tr><td>GET</td><td class="mono">/live</td><td>Live simulation</td></tr>
+              <tr><td>GET</td><td class="mono">/about</td><td>This page</td></tr>
+              <tr><td>GET</td><td class="mono">/api/metrics</td><td>Metrics as JSON</td></tr>
+              <tr><td>GET</td><td class="mono">/api/health</td><td>Service status</td></tr>
+              <tr><td>GET</td><td class="mono">/api/simulation/&lt;id&gt;</td><td>Random stored records</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="panel h-100">
+        <div class="section-title mb-2">&#9888; Security measures</div>
+        <ul class="list-plain small">
+          <li>Uploaded files are renamed with <span class="mono">werkzeug.secure_filename</span> and prefixed by a timestamp</li>
+          <li>Only the <span class="mono">.csv</span> extension is accepted; other extensions are rejected</li>
+          <li>Upload size is capped by <span class="mono">MAX_CONTENT_LENGTH</span> (413 error page on overflow)</li>
+          <li>Flask secret key is read from the <span class="mono">CYBER_THREAT_SECRET_KEY</span> environment variable, never hard-coded</li>
+          <li>All database access goes through SQLAlchemy ORM queries (parameterised, no string-built SQL)</li>
+          <li>Uploaded content is parsed as data only &mdash; never executed</li>
+          <li>Errors are rendered as friendly pages instead of Python tracebacks</li>
+        </ul>
+
+        <div class="section-title mb-2 mt-3">&#128300; Limitations</div>
+        <ul class="list-plain small">
+          <li>Flow-level analysis cannot attribute an attack to a specific user</li>
+          <li>Encrypted traffic hides payload content, so only metadata is analysed</li>
+          <li>The bundled sample dataset is synthetic; real captures yield different accuracy</li>
+          <li>Models drift when network conditions change and must be retrained</li>
+        </ul>
+
+        <div class="section-title mb-2 mt-3">&#128161; Future improvements</div>
+        <ul class="list-plain small">
+          <li>Deep autoencoders for unsupervised anomaly detection</li>
+          <li>Online learning with concept-drift detection</li>
+          <li>Optional SHAP explanations per record</li>
+          <li>Time-series features for beaconing detection</li>
+          <li>Containerised deployment with a REST gateway</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  {% if metadata.generated_at %}
+  <div class="panel mt-3">
+    <div class="section-title mb-2">&#128190; Current training run</div>
+    <div class="row g-3 small">
+      <div class="col-md-4"><ul class="list-plain">
+        <li>Dataset: {{ metadata.dataset_name }}</li>
+        <li>Best model: {{ metadata.best_model }}</li>
+        <li>Classes: {{ metadata.class_names | join(', ') }}</li>
+      </ul></div>
+      <div class="col-md-4"><ul class="list-plain">
+        <li>Train records: {{ '{:,}'.format(metadata.train_records) }}</li>
+        <li>Test records: {{ '{:,}'.format(metadata.test_records) }}</li>
+        <li>Random state: {{ metadata.random_state }}</li>
+      </ul></div>
+      <div class="col-md-4"><ul class="list-plain">
+        <li>Duplicates removed: {{ metadata.duplicate_rows_removed }}</li>
+        <li>Missing values handled: {{ '{:,}'.format(metadata.missing_values_found) }}</li>
+        <li>Training time: {{ metadata.training_seconds }} s</li>
+      </ul></div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

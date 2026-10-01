@@ -1,0 +1,447 @@
+(function () {
+  "use strict";
+
+  const PALETTE = ["#22d3ee", "#f43f5e", "#a78bfa", "#22c55e", "#f59e0b", "#38bdf8", "#fb7185", "#34d399"];
+  const GRID = "rgba(148,163,184,0.14)";
+  const TEXT = "#8fa3bf";
+
+  Chart.defaults.color = TEXT;
+  Chart.defaults.font.family = '"Segoe UI", Inter, system-ui, sans-serif';
+  Chart.defaults.font.size = 12;
+
+  function readPayload() {
+    const node = document.getElementById("chart-data");
+    if (!node) {
+      return null;
+    }
+    try {
+      return JSON.parse(node.textContent);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function baseOptions(extra) {
+    return Object.assign(
+      {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: TEXT, boxWidth: 12 } },
+          tooltip: { backgroundColor: "#0b1120", borderColor: "#22d3ee", borderWidth: 1 }
+        },
+        scales: {
+          x: { ticks: { color: TEXT }, grid: { color: GRID } },
+          y: { ticks: { color: TEXT }, grid: { color: GRID }, beginAtZero: true }
+        }
+      },
+      extra || {}
+    );
+  }
+
+  function emptyState(canvas, message) {
+    const context = canvas.getContext("2d");
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = TEXT;
+    context.font = "13px Segoe UI";
+    context.textAlign = "center";
+    context.fillText(message, canvas.width / 2, canvas.height / 2);
+  }
+
+  function toEntries(mapping) {
+    return Object.keys(mapping || {}).map((key) => ({ label: key, value: mapping[key] }));
+  }
+
+  function renderNormalMalicious(canvas, payload) {
+    if (!payload.total_records) {
+      emptyState(canvas, "No records analysed yet");
+      return;
+    }
+    new Chart(canvas, {
+      type: "doughnut",
+      data: {
+        labels: ["Normal", "Malicious"],
+        datasets: [
+          {
+            data: [payload.normal, payload.malicious],
+            backgroundColor: ["#22c55e", "#f43f5e"],
+            borderColor: "#0b1120",
+            borderWidth: 3,
+            hoverOffset: 8
+          }
+        ]
+      },
+      options: baseOptions({
+        cutout: "62%",
+        plugins: {
+          legend: { position: "bottom", labels: { color: TEXT, boxWidth: 12 } },
+          tooltip: {
+            backgroundColor: "#0b1120",
+            borderColor: "#22d3ee",
+            borderWidth: 1,
+            callbacks: {
+              label: (context) => {
+                const total = context.dataset.data.reduce((a, b) => a + b, 0) || 1;
+                return ` ${context.label}: ${context.raw} (${((context.raw / total) * 100).toFixed(2)}%)`;
+              }
+            }
+          }
+        },
+        scales: {}
+      })
+    });
+  }
+
+  function renderAttackTypes(canvas, payload) {
+    const entries = toEntries(payload.attack_types).sort((a, b) => b.value - a.value);
+    if (!entries.length) {
+      emptyState(canvas, "No attack categories detected");
+      return;
+    }
+    new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: entries.map((item) => item.label),
+        datasets: [
+          {
+            label: "Records",
+            data: entries.map((item) => item.value),
+            backgroundColor: entries.map((_, index) => PALETTE[index % PALETTE.length]),
+            borderRadius: 6
+          }
+        ]
+      },
+      options: baseOptions({
+        indexAxis: "y",
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: TEXT }, grid: { color: GRID }, beginAtZero: true },
+          y: { ticks: { color: TEXT }, grid: { display: false } }
+        }
+      })
+    });
+  }
+
+  function renderProtocols(canvas, payload) {
+    const entries = toEntries(payload.protocols).sort((a, b) => b.value - a.value);
+    if (!entries.length) {
+      emptyState(canvas, "No protocol data available");
+      return;
+    }
+    new Chart(canvas, {
+      type: "polarArea",
+      data: {
+        labels: entries.map((item) => item.label),
+        datasets: [
+          {
+            data: entries.map((item) => item.value),
+            backgroundColor: entries.map((_, index) => PALETTE[index % PALETTE.length] + "cc"),
+            borderWidth: 0
+          }
+        ]
+      },
+      options: baseOptions({
+        plugins: { legend: { position: "right", labels: { color: TEXT, boxWidth: 12 } } },
+        scales: {
+          r: {
+            ticks: { color: TEXT, backdropColor: "transparent" },
+            grid: { color: GRID },
+            angleLines: { color: GRID }
+          }
+        }
+      })
+    });
+  }
+
+  function renderDirection(canvas, payload) {
+    const source = payload.directions || {};
+    const labels = Object.keys(source);
+    if (!labels.length) {
+      emptyState(canvas, "No direction data available");
+      return;
+    }
+    const colors = labels.map((label) => {
+      if (label === "UNIDIRECTIONAL") return "#f59e0b";
+      if (label === "FORWARD") return "#22d3ee";
+      if (label === "REVERSE") return "#a78bfa";
+      return "#64748b";
+    });
+    new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Flows",
+            data: labels.map((label) => source[label]),
+            backgroundColor: colors,
+            borderRadius: 6
+          }
+        ]
+      },
+      options: baseOptions({
+        plugins: { legend: { display: false } }
+      })
+    });
+  }
+
+  function renderProbability(canvas, payload) {
+    const histogram = payload.probability_histogram || {};
+    const labels = Object.keys(histogram);
+    if (!labels.length) {
+      emptyState(canvas, "Analyse a dataset to see probabilities");
+      return;
+    }
+    new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Records",
+            data: labels.map((key) => histogram[key]),
+            backgroundColor: labels.map((label) => {
+              const start = parseFloat(label.split("-")[0]);
+              return start >= 0.5 ? "#f43f5e" : start >= 0.3 ? "#f59e0b" : "#22c55e";
+            }),
+            borderRadius: 4
+          }
+        ]
+      },
+      options: baseOptions({
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: TEXT, maxRotation: 60, minRotation: 30 }, grid: { display: false } },
+          y: { ticks: { color: TEXT }, grid: { color: GRID }, beginAtZero: true }
+        }
+      })
+    });
+  }
+
+  function renderModels(canvas, payload) {
+    const models = (payload.models || []).filter((model) => model.model_name);
+    if (!models.length) {
+      emptyState(canvas, "Train the models to compare performance");
+      return;
+    }
+    new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: models.map((model) => model.model_name),
+        datasets: [
+          { label: "Accuracy", data: models.map((m) => m.accuracy || 0), backgroundColor: "#22d3ee" },
+          { label: "Precision", data: models.map((m) => m.precision || 0), backgroundColor: "#a78bfa" },
+          { label: "Recall", data: models.map((m) => m.recall || 0), backgroundColor: "#22c55e" },
+          { label: "F1", data: models.map((m) => m.f1_score || 0), backgroundColor: "#f59e0b" },
+          { label: "ROC-AUC", data: models.map((m) => m.roc_auc || 0), backgroundColor: "#f43f5e" }
+        ]
+      },
+      options: baseOptions({
+        plugins: { legend: { labels: { color: TEXT, boxWidth: 12 } } },
+        scales: {
+          x: { ticks: { color: TEXT, maxRotation: 40, minRotation: 20 }, grid: { display: false } },
+          y: { ticks: { color: TEXT }, grid: { color: GRID }, beginAtZero: true, suggestedMax: 1 }
+        }
+      })
+    });
+  }
+
+  function renderCharts() {
+    const payload = readPayload();
+    if (!payload) {
+      return;
+    }
+    const renderers = {
+      chartNormalMalicious: renderNormalMalicious,
+      chartAttackTypes: renderAttackTypes,
+      chartProtocols: renderProtocols,
+      chartDirection: renderDirection,
+      chartProbability: renderProbability,
+      chartModels: renderModels
+    };
+    (window.CYBER_CHARTS || Object.keys(renderers)).forEach(function (id) {
+      const canvas = document.getElementById(id);
+      if (canvas && renderers[id]) {
+        renderers[id](canvas, payload);
+      }
+    });
+  }
+
+  window.initUploadDropZone = function () {
+    const zone = document.getElementById("dropZone");
+    const input = document.getElementById("datasetInput");
+    const label = document.getElementById("fileName");
+    if (!zone || !input || !label) {
+      return;
+    }
+    zone.addEventListener("click", function () {
+      input.click();
+    });
+    ["dragenter", "dragover"].forEach(function (name) {
+      zone.addEventListener(name, function (event) {
+        event.preventDefault();
+        zone.classList.add("dragover");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (name) {
+      zone.addEventListener(name, function (event) {
+        event.preventDefault();
+        zone.classList.remove("dragover");
+      });
+    });
+    zone.addEventListener("drop", function (event) {
+      if (event.dataTransfer && event.dataTransfer.files.length) {
+        input.files = event.dataTransfer.files;
+        label.textContent = event.dataTransfer.files[0].name;
+      }
+    });
+    input.addEventListener("change", function () {
+      label.textContent = input.files.length ? input.files[0].name : "No file selected";
+    });
+  };
+
+  window.initLiveSimulation = function () {
+    const startBtn = document.getElementById("startBtn");
+    const pauseBtn = document.getElementById("pauseBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const select = document.getElementById("uploadSelect");
+    const intervalRange = document.getElementById("intervalRange");
+    const intervalValue = document.getElementById("intervalValue");
+    const streamBody = document.getElementById("streamBody");
+    const stateLabel = document.getElementById("engineState");
+    const dot = document.getElementById("engineDot");
+    const statSeen = document.getElementById("statSeen");
+    const statNormal = document.getElementById("statNormal");
+    const statMalicious = document.getElementById("statMalicious");
+    if (!startBtn || !streamBody) {
+      return;
+    }
+
+    let timer = null;
+    const counters = { seen: 0, normal: 0, malicious: 0 };
+
+    function setState(state) {
+      stateLabel.textContent = state;
+      dot.className = state === "alert" ? "pulse-dot danger" : "pulse-dot";
+    }
+
+    function resetCounters() {
+      counters.seen = 0;
+      counters.normal = 0;
+      counters.malicious = 0;
+      statSeen.textContent = "0";
+      statNormal.textContent = "0";
+      statMalicious.textContent = "0";
+    }
+
+    function addRow(record) {
+      const placeholder = document.getElementById("placeholder");
+      if (placeholder) {
+        placeholder.remove();
+      }
+      const row = document.createElement("tr");
+      row.className = "live-row-enter";
+      const malicious = record.prediction === "MALICIOUS";
+      row.innerHTML =
+        `<td class="mono">${record.source_ip}</td>` +
+        `<td class="mono">${record.destination_ip}</td>` +
+        `<td>${record.protocol}</td>` +
+        `<td class="numeric">${record.packet_count}</td>` +
+        `<td>${record.traffic_direction}</td>` +
+        `<td><span class="badge-soft ${malicious ? "badge-malicious" : "badge-normal"}">${record.prediction}</span></td>` +
+        `<td class="numeric">${Number(record.threat_probability).toFixed(2)}%</td>` +
+        `<td>${malicious ? record.attack_type : "—"}</td>`;
+      streamBody.prepend(row);
+      while (streamBody.children.length > 60) {
+        streamBody.removeChild(streamBody.lastChild);
+      }
+
+      counters.seen += 1;
+      if (malicious) {
+        counters.malicious += 1;
+      } else {
+        counters.normal += 1;
+      }
+      statSeen.textContent = counters.seen;
+      statNormal.textContent = counters.normal;
+      statMalicious.textContent = counters.malicious;
+      setState(malicious ? "alert" : "monitoring");
+    }
+
+    async function tick() {
+      const uploadId = select ? select.value : "";
+      if (!uploadId) {
+        stop();
+        setState("no dataset");
+        return;
+      }
+      try {
+        const response = await fetch(`/api/simulation/${uploadId}?limit=1`);
+        if (!response.ok) {
+          throw new Error("simulation endpoint failed");
+        }
+        const data = await response.json();
+        if (!data.records || !data.records.length) {
+          setState("no records");
+          return;
+        }
+        addRow(data.records[0]);
+      } catch (error) {
+        setState("error");
+      }
+    }
+
+    function stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      startBtn.disabled = false;
+      pauseBtn.disabled = true;
+      if (stateLabel.textContent !== "error") {
+        setState("idle");
+      }
+    }
+
+    function start() {
+      if (!select || !select.value) {
+        return;
+      }
+      stop();
+      const delay = intervalRange ? parseInt(intervalRange.value, 10) : 1200;
+      tick();
+      timer = setInterval(tick, delay);
+      startBtn.disabled = true;
+      pauseBtn.disabled = false;
+    }
+
+    startBtn.addEventListener("click", start);
+    pauseBtn.addEventListener("click", stop);
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        stop();
+        streamBody.innerHTML =
+          '<tr id="placeholder"><td colspan="8" class="text-secondary">Press Start to begin the simulation.</td></tr>';
+        resetCounters();
+      });
+    }
+    if (intervalRange && intervalValue) {
+      intervalRange.addEventListener("input", function () {
+        intervalValue.textContent = intervalRange.value;
+        if (timer) {
+          start();
+        }
+      });
+    }
+  };
+
+  document.addEventListener("DOMContentLoaded", function () {
+    renderCharts();
+    if (window.initUploadDropZone && document.getElementById("dropZone")) {
+      window.initUploadDropZone();
+    }
+    if (window.initLiveSimulation && document.getElementById("streamBody")) {
+      window.initLiveSimulation();
+    }
+  });
+})();

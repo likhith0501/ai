@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div class="row align-items-center g-4">
+    <div class="col-lg-7">
+      <span class="eyebrow"><span class="pulse-dot"></span> Threat Detection Engine</span>
+      <h1 class="mt-3">AI-Based Detection of Cyber Threats in <span class="gradient-text">Unidirectional IP Traffic</span></h1>
+      <p class="lead-muted mt-3">
+        Upload a network traffic dataset, let the pipeline clean it, identify unidirectional flows,
+        engineer threat features and score every record with a trained machine-learning model.
+        Results appear instantly on a cybersecurity dashboard with full model performance metrics.
+      </p>
+      <div class="d-flex flex-wrap gap-2 mt-4">
+        <a class="btn btn-cyber btn-accent" href="{{ url_for('upload') }}">&#8682; Upload Traffic Dataset</a>
+        <a class="btn btn-cyber btn-ghost" href="{{ url_for('dashboard') }}">&#128202; Dashboard</a>
+        <a class="btn btn-cyber btn-ghost" href="{{ url_for('metrics') }}">&#129351; Model Performance</a>
+        <a class="btn btn-cyber btn-ghost" href="{{ url_for('about') }}">&#8505; About Project</a>
+      </div>
+      <div class="d-flex flex-wrap gap-3 mt-4 text-secondary small">
+        <span>&#10003; CSV datasets with flexible column names</span>
+        <span>&#10003; Accuracy, Precision, Recall, F1, ROC-AUC</span>
+        <span>&#10003; Explainable feature importance</span>
+      </div>
+    </div>
+    <div class="col-lg-5">
+      <div class="panel">
+        <div class="section-title mb-3">&#129504; System Overview</div>
+        <ul class="list-plain">
+          <li>Trains Logistic Regression, Decision Tree, Random Forest, Gradient Boosting{% if metadata.xgboost_available %} and XGBoost{% endif %}</li>
+          <li>Compares models on a stratified hold-out split (seed {{ metadata.random_state | default(42) }})</li>
+          <li>Derives a <span class="mono">traffic_direction</span> feature: FORWARD / REVERSE / UNIDIRECTIONAL</li>
+          <li>Stores uploads, predictions and metrics in SQLite</li>
+          <li>Exposes a JSON endpoint at <span class="mono">POST /api/predict</span></li>
+        </ul>
+        <div class="row g-2 mt-3">
+          <div class="col-4"><div class="panel panel-tight text-center">
+            <div class="stat-label">Models</div>
+            <div class="stat-value stat-accent">{{ stats.models }}</div></div></div>
+          <div class="col-4"><div class="panel panel-tight text-center">
+            <div class="stat-label">Features</div>
+            <div class="stat-value stat-purple">{{ stats.features }}</div></div></div>
+          <div class="col-4"><div class="panel panel-tight text-center">
+            <div class="stat-label">Records</div>
+            <div class="stat-value stat-warning">{{ '{:,}'.format(stats.records) }}</div></div></div>
+        </div>
+        {% if not model_available %}
+        <div class="alert-cyber mt-3 mb-0">
+          No trained model found. Run <span class="mono">python training/train.py</span> to create one.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-4">
+  <div class="row g-3">
+    <div class="col-md-4">
+      <div class="panel h-100">
+        <div class="d-flex gap-3 align-items-start">
+          <div class="feature-icon">&#128165;</div>
+          <div>
+            <h6 class="mb-1">Traffic Analytics</h6>
+            <p class="mb-0 text-secondary small">Protocol mix, direction profile and threat probability distributions for every analysed dataset.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="panel h-100">
+        <div class="d-flex gap-3 align-items-start">
+          <div class="feature-icon">&#128681;</div>
+          <div>
+            <h6 class="mb-1">Threat Alerts</h6>
+            <p class="mb-0 text-secondary small">Each record is labelled NORMAL or MALICIOUS with a calibrated threat probability.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="panel h-100">
+        <div class="d-flex gap-3 align-items-start">
+          <div class="feature-icon">&#129302;</div>
+          <div>
+            <h6 class="mb-1">ML Models</h6>
+            <p class="mb-0 text-secondary small">A benchmark of classical and boosting classifiers trained on unidirectional flow statistics.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="panel h-100">
+        <div class="d-flex gap-3 align-items-start">
+          <div class="feature-icon">&#128200;</div>
+          <div>
+            <h6 class="mb-1">Performance Metrics</h6>
+            <p class="mb-0 text-secondary small">Confusion matrices, ROC curves and a full metric table computed on real hold-out data.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="panel h-100">
+        <div class="d-flex gap-3 align-items-start">
+          <div class="feature-icon">&#128229;</div>
+          <div>
+            <h6 class="mb-1">Live Simulation</h6>
+            <p class="mb-0 text-secondary small">Replay stored records one by one to watch classification happen in near real time.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="panel h-100">
+        <div class="d-flex gap-3 align-items-start">
+          <div class="feature-icon">&#128203;</div>
+          <div>
+            <h6 class="mb-1">Reports &amp; API</h6>
+            <p class="mb-0 text-secondary small">Download the prediction CSV or call the REST endpoint from any other tool.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% if uploads %}
+<section class="py-3">
+  <div class="panel">
+    <div class="section-title mb-3">&#128100; Recent Analyses</div>
+    <div class="table-responsive">
+      <table class="table table-cyber">
+        <thead>
+          <tr>
+            <th>File</th><th>Uploaded</th><th class="numeric">Records</th>
+            <th class="numeric">Normal</th><th class="numeric">Malicious</th>
+            <th class="numeric">Unidirectional</th><th>Model</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in uploads %}
+          <tr>
+            <td>{{ item.filename }}</td>
+            <td>{{ item.upload_time.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="numeric">{{ '{:,}'.format(item.total_records) }}</td>
+            <td class="numeric stat-normal">{{ '{:,}'.format(item.normal_records) }}</td>
+            <td class="numeric stat-malicious">{{ '{:,}'.format(item.malicious_records) }}</td>
+            <td class="numeric stat-warning">{{ '{:,}'.format(item.unidirectional_records) }}</td>
+            <td>{{ item.model_name }}</td>
+            <td><a class="btn btn-sm btn-ghost" href="{{ url_for('results', upload_id=item.id) }}">View</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,38 @@
+{% macro stat_card(label, value, icon, tone="stat-accent") %}
+<div class="stat-card">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <div class="stat-label">{{ label }}</div>
+      <div class="stat-value {{ tone }}">{{ value }}</div>
+    </div>
+    <div class="stat-icon {{ tone }}">{{ icon }}</div>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro chart_panel(title, canvas_id, hint="", size="") %}
+<div class="panel h-100">
+  <div class="section-title mb-1">{{ title }}</div>
+  {% if hint %}<div class="text-secondary small mb-2">{{ hint }}</div>{% endif %}
+  <div class="chart-box {{ size }}"><canvas id="{{ canvas_id }}"></canvas></div>
+</div>
+{% endmacro %}
+
+{% macro progress_bar(label, value, tone="var(--accent)") %}
+<div class="metric-bar-row">
+  <div class="metric-bar-label"><span>{{ label }}</span><span>{{ '%.4f'|format(value) if value is not none else 'n/a' }}</span></div>
+  <div class="progress-track">
+    <div class="progress-fill" style="width: {{ ((value or 0) * 100)|round(1) }}%; background: {{ tone }};"></div>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro badge_for(label) %}
+  {%- if label == 'NORMAL' -%}
+    <span class="badge-soft badge-normal">NORMAL</span>
+  {%- elif label == 'MALICIOUS' -%}
+    <span class="badge-soft badge-malicious">MALICIOUS</span>
+  {%- else -%}
+    <span class="badge-soft badge-unknown">{{ label }}</span>
+  {%- endif -%}
+{% endmacro %}
