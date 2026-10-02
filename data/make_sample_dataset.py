@@ -10,6 +10,7 @@ Usage:  python data/make_sample_dataset.py
 
 from __future__ import annotations
 
+import argparse
 import os
 from typing import List
 
@@ -179,9 +180,18 @@ def _blend_features(frame: pd.DataFrame, targets: np.ndarray, sources: np.ndarra
         frame.iloc[chosen, location] = frame.iloc[donors, location].to_numpy()
 
 
-def build_dataset() -> pd.DataFrame:
-    rng = np.random.default_rng(RANDOM_STATE)
-    frames = [_sample_class(rng, label, size) for label, size in CLASS_SPECS]
+def _scale_specs(total_rows: int) -> List[tuple]:
+    """Scale the class mix proportionally to a requested total row count."""
+    original_total = sum(size for _, size in CLASS_SPECS)
+    specs = [(label, max(20, int(round(size * total_rows / original_total))))
+             for label, size in CLASS_SPECS]
+    return specs
+
+
+def build_dataset(total_rows: int = 0, seed: int = RANDOM_STATE) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    specs = _scale_specs(total_rows) if total_rows else CLASS_SPECS
+    frames = [_sample_class(rng, label, size) for label, size in specs]
     frame = pd.concat(frames, ignore_index=True)
     frame = frame.sample(frac=1.0, random_state=RANDOM_STATE).reset_index(drop=True)
     frame["Flow_ID"] = [f"flow-{i:06d}" for i in range(len(frame))]
@@ -226,9 +236,16 @@ def build_dataset() -> pd.DataFrame:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate the sample traffic dataset.")
+    parser.add_argument("--rows", type=int, default=0,
+                        help="Total number of rows to generate (default: the full 10k dataset).")
+    parser.add_argument("--seed", type=int, default=RANDOM_STATE, help="Random seed for reproducibility.")
+    parser.add_argument("--output", default="traffic_dataset.csv", help="Output CSV file name.")
+    args = parser.parse_args()
+
     here = os.path.dirname(os.path.abspath(__file__))
-    target = os.path.join(here, "traffic_dataset.csv")
-    frame = build_dataset()
+    target = os.path.join(here, args.output)
+    frame = build_dataset(total_rows=args.rows, seed=args.seed)
     frame.to_csv(target, index=False)
     print(f"Written {len(frame)} rows x {frame.shape[1]} columns to {target}")
     print(frame["Label"].value_counts().to_string())

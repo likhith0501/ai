@@ -436,3 +436,139 @@ def test_training_metadata_is_consistent():
         assert os.path.exists(
             os.path.join(ROOT_DIR, "static", "images", "generated", metadata["confusion_images"][record["model_name"]])
         )
+# ----------------------------------------------------------------- live sensor
+
+
+def test_aggregator_counts_both_directions():
+    from utils.live_sensor import FlowAggregator
+
+    aggregator = FlowAggregator(flow_timeout=5.0)
+    aggregator.add_packet("10.0.0.1", "10.0.0.2", 51000, 80, 6, 1000, timestamp=100.0, flags=0x02)
+    aggregator.add_packet("10.0.0.1", "10.0.0.2", 51000, 80, 6, 1200, timestamp=100.1, flags=0x12)
+    aggregator.add_packet("10.0.0.2", "10.0.0.1", 80, 51000, 6, 400, timestamp=100.2, flags=0x10)
+
+    record = aggregator.records()[0]
+    assert record["Forward_Packets"] == 2
+    assert record["Forward_Bytes"] == 2200
+    assert record["Reverse_Packets"] == 1
+    assert record["Reverse_Bytes"] == 400
+    assert record["Packet_Count"] == 3
+    assert record["Byte_Count"] == 2600
+    assert record["Traffic_Direction"] == pp.DIRECTION_FORWARD
+    assert "S" in record["TCP_Flags"] and "A" in record["TCP_Flags"]
+    assert record["Flow_Duration"] == 200000
+
+
+def test_aggregator_marks_one_way_flows_as_unidirectional():
+    from utils.live_sensor import FlowAggregator
+
+    aggregator = FlowAggregator(flow_timeout=5.0)
+    for index in range(4):
+        aggregator.add_packet("192.168.0.5", "8.8.8.8", 40000, 53, 17, 90, timestamp=200.0 + index * 0.01)
+    record = aggregator.records()[0]
+    assert record["Reverse_Packets"] == 0
+    assert record["Traffic_Direction"] == pp.DIRECTION_UNIDIRECTIONAL
+    assert record["Protocol"] == "UDP"
+    assert record["Inter_Arrival_Time"] > 0
+
+
+def test_aggregator_expires_idle_flows():
+    from utils.live_sensor import FlowAggregator
+
+    aggregator = FlowAggregator(flow_timeout=1.0)
+    aggregator.add_packet("10.0.0.1", "10.0.0.2", 1, 2, 6, 100, timestamp=300.0)
+    assert aggregator.active_count() == 1
+    assert aggregator.expire(now=300.5) == []
+    expired = aggregator.expire(now=301.5)
+    assert len(expired) == 1
+    assert expired[0]["Packet_Count"] == 1
+    assert aggregator.active_count() == 0
+
+
+def test_aggregator_caps_memory():
+    from utils.live_sensor import FlowAggregator
+
+    aggregator = FlowAggregator(max_flows=5)
+    for index in range(20):
+        aggregator.add_packet("10.0.0.1", f"10.0.0.{index}", 1000 + index, 80, 6, 100, timestamp=400.0)
+    assert aggregator.active_count() == 5
+    assert aggregator.packets_seen == 20
+
+
+def test_aggregator_drain_returns_everything():
+    from utils.live_sensor import FlowAggregator
+
+    aggregator = FlowAggregator()
+    aggregator.add_packet("10.0.0.1", "10.0.0.2", 1, 2, 6, 100, timestamp=500.0)
+    aggregator.add_packet("10.0.0.3", "10.0.0.4", 3, 4, 17, 100, timestamp=500.0)
+    assert len(aggregator.drain()) == 2
+    assert aggregator.active_count() == 0
+
+
+def test_sensor_record_schema_matches_training_features():
+    from utils.live_sensor import FlowAggregator
+
+    if not os.path.exists(METADATA_PATH):
+        pytest.skip("run 'python training/train.py' first")
+    with open(METADATA_PATH, encoding="utf-8") as handle:
+        metadata = json.load(handle)
+
+    aggregator = FlowAggregator()
+    aggregator.add_packet("10.0.0.1", "10.0.0.2", 51000, 443, 6, 1500, timestamp=600.0, flags=0x12)
+    canonical = pp.canonicalize_columns(pd.DataFrame(aggregator.records()))[0]
+    canonical = pp.add_engineered_features(canonical)
+    assert set(metadata["feature_columns"]) <= set(canonical.columns)
+
+
+def test_interface_listing_does_not_fail():
+    from utils.live_sensor import list_interfaces
+
+    assert isinstance(list_interfaces(), list)
+
+
+@requires_model
+def test_score_records_uses_the_trained_model():
+    from utils.live_sensor import FlowAggregator, score_records
+
+    aggregator = FlowAggregator()
+    for index in range(6):
+        aggregator.add_packet("10.0.0.1", "10.0.0.2", 51000, 22, 6, 200, timestamp=700.0 + index * 0.01)
+    scored = score_records(aggregator.records())
+    assert scored is not None and len(scored) == 1
+    assert scored["Prediction"].iloc[0] in {"NORMAL", "MALICIOUS"}
+    assert 0.0 <= float(scored["Threat Probability"].iloc[0]) <= 100.0
+
+
+@requires_model
+def test_sensor_sample_endpoint_scores_and_stores(client, app_module):
+    from utils.live_sensor import FlowAggregator
+
+    aggregator = FlowAggregator()
+    for index in range(4):
+        aggregator.add_packet("172.16.0.4", "104.21.1.1", 60000, 443, 6, 1400,
+                              timestamp=800.0 + index * 0.05, flags=0x12)
+    records = aggregator.records()
+
+    response = client.post("/api/sensor/sample", json={"interface": "unit-test", "records": records})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total_records"] == len(records)
+    assert payload["normal"] + payload["malicious"] == len(records)
+    assert payload["analysis_id"]
+
+    results = client.get(f"/results/{payload['analysis_id']}")
+    assert results.status_code == 200
+    with app_module.app.app_context():
+        stored = app_module.Upload.query.get(payload["analysis_id"])
+        assert stored.filename.startswith("live-sensor::")
+
+
+def test_sensor_endpoint_validates_payload(client):
+    assert client.post("/api/sensor/sample", json={}).status_code == 400
+    assert client.post("/api/sensor/sample", json={"records": []}).status_code == 400
+    assert client.post("/api/sensor/sample", json={"records": "nope"}).status_code == 400
+
+
+def test_sensor_rejects_records_without_known_features(client):
+    response = client.post("/api/sensor/sample", json={"records": [{"colour": "red", "size": 1}]})
+    assert response.status_code in (400, 500)

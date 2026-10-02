@@ -20,3 +20,8 @@ xgboost>=2.0
 
 # Optional: needed only to run the automated test suite (python -m pytest tests -q).
 # pytest>=7.4
+
+# Optional: required by the live sensor (utils/live_sensor.py) for real packet capture.
+# Capture additionally needs the Npcap driver on Windows (https://npcap.com) and
+# administrator/root privileges. Everything else works without these.
+# scapy>=2.5

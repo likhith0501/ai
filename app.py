@@ -684,6 +684,83 @@ def api_simulation(upload_id: int):
     )
 
 
+@app.route("/api/sensor/sample", methods=["POST"])
+def api_sensor_sample():
+    """Accept live flow records from ``utils/live_sensor.py`` and score them.
+
+    The sensor runs on the operator's machine and pushes flow metadata only;
+    the server never captures packets itself.
+    """
+    if not app.config.get("SENSOR_API_ENABLED", True):
+        return jsonify({"error": "Sensor ingestion is disabled on this server", "status": 403}), 403
+
+    payload = request.get_json(silent=True) or {}
+    records = payload.get("records") if isinstance(payload, dict) else None
+    if not records or not isinstance(records, list):
+        return jsonify({"error": "Send a JSON object with a non-empty 'records' list", "status": 400}), 400
+    if len(records) > int(MAX_STORED_PREDICTIONS):
+        records = records[: int(MAX_STORED_PREDICTIONS)]
+
+    predictor = get_predictor()
+    if not predictor.available:
+        return jsonify({"error": predictor.error or "No trained model is available", "status": 503}), 503
+
+    try:
+        frame = pd.DataFrame(records)
+        canonical, _, unmapped = pp.canonicalize_columns(frame)
+        label_column = pp.find_label_column(canonical.columns)
+        canonical = pp.clean_frame(canonical, label_column)
+        canonical["Label_normalised"] = "unlabelled"
+        canonical = pp.add_engineered_features(canonical)
+        result = predictor.predict_frame(canonical)
+    except pp.DatasetError as exc:
+        return jsonify({"error": str(exc), "status": 400}), 400
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"Sensor ingestion failed: {exc}", "status": 500}), 500
+
+    interface = str(payload.get("interface", "live sensor"))[:64]
+    upload = Upload(
+        filename=f"live-sensor::{interface}",
+        stored_path=None,
+        total_records=result.total_records,
+        unidirectional_records=result.unidirectional_records,
+        normal_records=result.normal_records,
+        malicious_records=result.malicious_records,
+        threat_percentage=round(result.threat_percentage, 2),
+        model_name=result.model_name,
+        status="analysed",
+        summary_json=json.dumps(result.summary_dict()),
+    )
+    db.session.add(upload)
+    db.session.flush()
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows = [
+        {
+            "upload_id": upload.id,
+            "record_index": index,
+            "prediction": str(row["Prediction"]),
+            "probability": float(row["Threat Probability"]),
+            "attack_type": str(row["Attack Type"]),
+            "source_ip": str(row["Source IP"])[:64],
+            "destination_ip": str(row["Destination IP"])[:64],
+            "protocol": str(row["Protocol"])[:32],
+            "packet_count": float(row["Packet Count"]),
+            "traffic_direction": str(row["Traffic Direction"])[:32],
+            "timestamp": now,
+        }
+        for index, (_, row) in enumerate(result.records_frame.iterrows())
+    ]
+    if rows:
+        db.session.bulk_insert_mappings(Prediction, rows)
+    db.session.commit()
+
+    body = result.summary_dict()
+    body["analysis_id"] = upload.id
+    body["unmapped_columns"] = unmapped
+    return jsonify(body), 200
+
+
 @app.route("/api/health")
 def api_health():
     predictor = get_predictor()

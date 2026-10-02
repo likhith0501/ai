@@ -418,7 +418,63 @@ flask --app app init-db       # create schema and mirror training metrics
 flask --app app reload-model  # reload artifacts without restarting
 ```
 
-### Deploying on Render
+### Live Traffic Sensor (no CSV needed)
+
+The simulation above replays stored records. `utils/live_sensor.py` goes one step further and builds
+flow records from **live traffic on an interface you choose**, then scores them with the same model —
+no dataset upload required.
+
+```bash
+python utils/live_sensor.py --list-interfaces                  # what can be monitored
+python utils/live_sensor.py --iface Wi-Fi --seconds 120         # terminal alerts
+python utils/live_sensor.py --iface eth0 --csv captures/live.csv
+python utils/live_sensor.py --iface eth0 --api http://127.0.0.1:5000/api/sensor/sample
+```
+
+How it works:
+
+1. Packets are read on the selected interface and reduced to **flow metadata**: source/destination IP
+   and port, protocol, packet and byte counts, forward/reverse counters, duration, mean inter-arrival
+   time and TCP flags.
+2. `FlowAggregator` builds bidirectional 5-tuple flows and expires a flow after `--flow-timeout`
+   seconds of silence (default 20 s). A flow with no reverse traffic is reported as `UNIDIRECTIONAL`.
+3. Each completed flow is converted to the canonical training schema, pushed through
+   `training/preprocess.py` and scored by the stored pipeline — the model is never retrained.
+4. Verdicts are printed in the terminal; with `--csv` they are saved, and with `--api` they are POSTed
+   to `/api/sensor/sample`, which stores them in SQLite so they appear in the dashboard, prediction
+   history and live simulation as `live-sensor::<interface>`.
+
+```
+!!   192.168.1.24 -> 93.184.216.34   TCP  pkts=3120 dir=UNIDIRECTIONAL MALICIOUS  threat= 96.4% DDoS
+      192.168.1.24 -> 93.184.216.34   TCP  pkts=40   dir=FORWARD       NORMAL    threat= 32.7%
+```
+
+**Prerequisites**
+
+| Platform | Requirement |
+| --- | --- |
+| Windows | `pip install scapy`, install Npcap (https://npcap.com) with WinPcap compatibility, run the terminal as Administrator |
+| Linux / macOS | `pip install scapy`, run as root or grant `CAP_NET_RAW` |
+
+Without them the sensor exits with the exact steps instead of a stack trace:
+
+```
+[error] live capture unavailable: Live capture needs the Npcap driver and administrator rights.
+  1. Install Npcap from https://npcap.com (keep 'WinPcap API-compatible mode' enabled).
+  2. Re-open the terminal with 'Run as administrator'.
+```
+
+**Scope and safety** — the sensor is a defensive tool for systems you own or are authorised to
+monitor. It reads flow metadata only: payloads are never assembled, parsed, logged or stored, and it
+is not a packet interceptor, scanner or offensive tool. Keep `--iface` pointed at your own interfaces;
+on shared or untrusted networks, restrict it to loopback (`--iface lo` / the loopback adapter).
+
+`POST /api/sensor/sample` is unauthenticated, exactly like the rest of the web UI, so add
+authentication before exposing a deployed instance.
+
+---
+
+## Deploying on Render
 
 The repository ships a Render blueprint, so deployment is a push plus a "Create" click.
 
