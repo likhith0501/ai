@@ -389,10 +389,16 @@ Environment variables (no secrets are stored in the source tree):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CYBER_THREAT_SECRET_KEY` | random per process | Flask session key |
+| `CYBER_THREAT_PASSWORD` | unset (auth off) | access password; **setting it turns authentication on** |
+| `CYBER_THREAT_PASSWORD_HASH` | unset | Werkzeug password hash, preferred over the plaintext variable |
+| `FORCE_SECURE_COOKIES` | `0` | set to `1` behind HTTPS (Render) |
+| `SESSION_HOURS` | `8` | session lifetime |
+| `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCKOUT_SECONDS` | `8` / `300` | login throttling |
 | `MAX_UPLOAD_MB` | `64` | maximum upload size |
 | `MAX_STORED_PREDICTIONS` | `20000` | per-analysis rows stored in SQLite |
+| `APP_DATA_DIR` | project folder | location of `database/`, `uploads/`, `reports/` |
 | `FLASK_DEBUG` | `0` | set to `1` for the reloader/debugger |
-| `PORT` | `5000` | listen port |
+| `PORT` / `HOST` | `5000` / `127.0.0.1` | listen address |
 
 ---
 
@@ -640,6 +646,34 @@ cyber-threat-detection/
 
 ---
 
+## Authentication
+
+The application is **open by default** so local use needs no setup, and protected the moment a
+password is supplied:
+
+```bat
+set CYBER_THREAT_PASSWORD=choose-a-strong-password
+python app.py
+```
+
+Every page except `/login` then requires a session, every state-changing request requires a CSRF
+token, and JSON endpoints answer `401 {"error": "Authentication required"}` instead of redirecting.
+Eight failed attempts from one client trigger a five-minute lockout. Cookies are `HttpOnly` and
+`SameSite=Lax`, and `Secure` when `FORCE_SECURE_COOKIES=1`.
+
+For production prefer the hash, so the plaintext never exists in the environment:
+
+```bash
+python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('mypassword'))"
+set CYBER_THREAT_PASSWORD_HASH=pbkdf2:sha256:...
+```
+
+The password is compared with `werkzeug.security.check_password_hash`, is never written to the
+database, and never appears in a log line. `render.yaml` already generates both the secret key and a
+random password for the deployed instance — read the password from the Render dashboard.
+
+---
+
 ## Security
 
 * Filenames are sanitised with `werkzeug.secure_filename` and prefixed by a timestamp; the original
@@ -650,6 +684,8 @@ cyber-threat-detection/
   absent, and no credential is hard-coded.
 * Database access uses SQLAlchemy ORM queries only — no string-built SQL.
 * Uploaded content is parsed strictly as data and never executed.
+* Authentication is opt-in via `CYBER_THREAT_PASSWORD`: session login, CSRF tokens on every
+  state-changing request, `HttpOnly`/`SameSite`/`Secure` cookies and login throttling.
 * All failures (missing dataset, invalid CSV, empty CSV, missing label, missing model, unknown
   columns, size limit, 404/500) render a friendly page instead of a traceback.
 

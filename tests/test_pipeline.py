@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -572,3 +573,121 @@ def test_sensor_endpoint_validates_payload(client):
 def test_sensor_rejects_records_without_known_features(client):
     response = client.post("/api/sensor/sample", json={"records": [{"colour": "red", "size": 1}]})
     assert response.status_code in (400, 500)
+
+# -------------------------------------------------------------------- security
+
+
+def _enable_auth(app_module, password: str = "s3cret-pw"):
+    from werkzeug.security import generate_password_hash
+
+    app_module.app.config["AUTH_ENABLED"] = True
+    app_module.app.config["PASSWORD_HASH"] = generate_password_hash(password)
+    app_module._app_password_hash = generate_password_hash(password)
+    return password
+
+
+def _disable_auth(app_module):
+    app_module.app.config["AUTH_ENABLED"] = False
+    app_module.app.config["PASSWORD_HASH"] = None
+
+
+def _csrf(client) -> str:
+    response = client.get("/login")
+    match = re.search(r'name="csrf_token" value="([^"]+)"', response.data.decode("utf-8"))
+    return match.group(1) if match else ""
+
+
+def test_auth_is_disabled_without_a_password_env(app_module, client):
+    _disable_auth(app_module)
+    assert app_module.auth_enabled() is False
+    assert client.get("/dashboard").status_code == 200
+
+
+def test_pages_redirect_to_login_when_auth_enabled(app_module, client):
+    password = _enable_auth(app_module)
+    try:
+        response = client.get("/dashboard")
+        assert response.status_code == 302
+        assert "/login" in response.headers["Location"]
+        assert client.get("/upload").status_code == 302
+    finally:
+        _disable_auth(app_module)
+
+
+def test_api_returns_401_without_session(app_module, client):
+    _enable_auth(app_module)
+    try:
+        response = client.post("/api/predict", data={}, content_type="multipart/form-data")
+        assert response.status_code == 401
+        assert response.get_json()["error"] == "Authentication required"
+    finally:
+        _disable_auth(app_module)
+
+
+def test_login_rejects_wrong_password_then_accepts(app_module, client):
+    password = _enable_auth(app_module)
+    try:
+        token = _csrf(client)
+        bad = client.post("/login", data={"password": "wrong", "csrf_token": token})
+        assert bad.status_code == 401
+        assert b"Incorrect password" in bad.data
+
+        good = client.post("/login", data={"password": password, "csrf_token": token})
+        assert good.status_code == 302
+        assert good.headers["Location"] in ("/", "http://localhost/")
+
+        assert client.get("/dashboard").status_code == 200
+        assert b"Sign out" in client.get("/").data
+
+        client.get("/logout")
+        assert client.get("/dashboard").status_code == 302
+    finally:
+        _disable_auth(app_module)
+
+
+def test_login_blocks_csrf_less_post(app_module, client):
+    password = _enable_auth(app_module)
+    try:
+        token = _csrf(client)
+        client.post("/login", data={"password": password, "csrf_token": token})
+        response = client.post("/predict", data={"stored_filename": "sample_dataset.csv"})
+        assert response.status_code == 400
+        assert b"Security Check Failed" in response.data
+    finally:
+        _disable_auth(app_module)
+
+
+def test_login_throttles_repeated_failures(app_module, client):
+    password = _enable_auth(app_module)
+    original = app_module.LOGIN_MAX_ATTEMPTS
+    app_module.LOGIN_MAX_ATTEMPTS = 3
+    app_module._login_attempts.clear()
+    try:
+        token = _csrf(client)
+        for _ in range(3):
+            client.post("/login", data={"password": "nope", "csrf_token": token})
+        locked = client.post("/login", data={"password": password, "csrf_token": token})
+        assert locked.status_code == 401
+        assert b"Too many failed attempts" in locked.data
+    finally:
+        app_module.LOGIN_MAX_ATTEMPTS = original
+        app_module._login_attempts.clear()
+        _disable_auth(app_module)
+
+
+def test_password_is_never_written_to_the_database(app_module, client):
+    password = _enable_auth(app_module, "unique-password-123")
+    try:
+        token = _csrf(client)
+        client.post("/login", data={"password": password, "csrf_token": token})
+        client.get("/dashboard")
+        import sqlite3
+
+        connection = sqlite3.connect(os.path.join(ROOT_DIR, "database", "cyber_threat.db"))
+        try:
+            dump = "\n".join(connection.iterdump())
+        finally:
+            connection.close()
+        assert password not in dump
+    finally:
+        _disable_auth(app_module)

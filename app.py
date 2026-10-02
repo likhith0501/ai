@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
+from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -16,10 +18,12 @@ from flask import (
     render_template,
     request,
     send_from_directory,
+    session,
     url_for,
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from training import preprocess as pp
@@ -37,6 +41,8 @@ ALLOWED_EXTENSIONS = {"csv"}
 SAMPLE_MARKER = "sample_dataset.csv"
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "64"))
 MAX_STORED_PREDICTIONS = int(os.environ.get("MAX_STORED_PREDICTIONS", "20000"))
+LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "8"))
+LOGIN_LOCKOUT_SECONDS = int(os.environ.get("LOGIN_LOCKOUT_SECONDS", "300"))
 
 for directory in (INSTANCE_DIR, UPLOAD_DIR, REPORT_DIR):
     os.makedirs(directory, exist_ok=True)
@@ -55,6 +61,25 @@ def _secret_key() -> str:
     return secrets.token_hex(32)
 
 
+def _auth_password_hash() -> Optional[str]:
+    """Return the stored password hash, or ``None`` when auth is disabled.
+
+    ``CYBER_THREAT_PASSWORD_HASH`` holds a Werkzeug hash. ``CYBER_THREAT_PASSWORD``
+    is accepted for convenience and hashed at start-up; it never leaves the process.
+    """
+    digest = os.environ.get("CYBER_THREAT_PASSWORD_HASH", "").strip()
+    if digest:
+        return digest
+    password = os.environ.get("CYBER_THREAT_PASSWORD", "")
+    if not password:
+        return None
+    return generate_password_hash(password)
+
+
+PASSWORD_HASH = _auth_password_hash()
+AUTH_ENABLED = PASSWORD_HASH is not None
+SECURE_COOKIES = os.environ.get("FORCE_SECURE_COOKIES", "0") == "1"
+
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=_secret_key(),
@@ -65,7 +90,17 @@ app.config.update(
     UPLOAD_FOLDER=UPLOAD_DIR,
     REPORT_FOLDER=REPORT_DIR,
     SAMPLE_DATASET=SAMPLE_DATASET,
+    AUTH_ENABLED=AUTH_ENABLED,
+    PASSWORD_HASH=PASSWORD_HASH,
+    SECURE_COOKIES=SECURE_COOKIES,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=SECURE_COOKIES,
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=int(os.environ.get("SESSION_HOURS", "8"))),
 )
+_app_password_hash = PASSWORD_HASH
+_login_attempts: Dict[str, List[float]] = {}
+PUBLIC_ENDPOINTS = frozenset({"login", "login_submit", "logout", "static", "api_health", "favicon"})
 
 db = SQLAlchemy(app)
 
@@ -134,6 +169,122 @@ class UserError(Exception):
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+# ------------------------------------------------------------------------ security
+
+
+def auth_enabled() -> bool:
+    """Authentication is active when a password hash was supplied by the environment."""
+    return bool(app.config.get("AUTH_ENABLED"))
+
+
+def is_authenticated() -> bool:
+    return bool(session.get("authenticated"))
+
+
+def csrf_token() -> str:
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+def _validate_csrf() -> bool:
+    submitted = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
+    expected = session.get("csrf_token", "")
+    return bool(expected) and secrets.compare_digest(str(submitted), str(expected))
+
+
+def _client_key() -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def _register_failure() -> None:
+    key = _client_key()
+    now = time.time()
+    history = [stamp for stamp in _login_attempts.get(key, []) if now - stamp < LOGIN_LOCKOUT_SECONDS]
+    history.append(now)
+    _login_attempts[key] = history
+
+
+def _locked_out() -> bool:
+    key = _client_key()
+    now = time.time()
+    history = [stamp for stamp in _login_attempts.get(key, []) if now - stamp < LOGIN_LOCKOUT_SECONDS]
+    _login_attempts[key] = history
+    return len(history) >= LOGIN_MAX_ATTEMPTS
+
+
+def login_required(view):
+    """Protect a single view with the session login when authentication is enabled."""
+
+    @wraps(view)
+    def wrapper(*args: Any, **kwargs: Any):
+        return view(*args, **kwargs)
+
+    return wrapper
+
+
+@app.before_request
+def enforce_authentication():
+    """Single choke point for authentication and CSRF on every request."""
+    if not auth_enabled():
+        return None
+    if request.endpoint in PUBLIC_ENDPOINTS:
+        return None
+    if not is_authenticated():
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Authentication required", "status": 401}), 401
+        return redirect(url_for("login", next=request.full_path if request.query_string else request.path))
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _validate_csrf():
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Invalid or missing CSRF token", "status": 400}), 400
+        return render_template("error.html", title="Security Check Failed",
+                               message="The form expired or the security token was invalid. "
+                                       "Please reload the page and try again.",
+                               status=400), 400
+    return None
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not auth_enabled():
+        return redirect(url_for("index"))
+    error = None
+    if request.method == "POST":
+        if not _validate_csrf():
+            error = "The form expired. Please try again."
+        elif _locked_out():
+            error = "Too many failed attempts. Try again in a few minutes."
+        else:
+            password = request.form.get("password", "")
+            stored = app.config.get("PASSWORD_HASH") or _app_password_hash
+            if stored and check_password_hash(stored, password):
+                _login_attempts.pop(_client_key(), None)
+                session.clear()
+                session["authenticated"] = True
+                session["csrf_token"] = secrets.token_urlsafe(32)
+                session.permanent = True
+                target = request.args.get("next") or request.form.get("next") or ""
+                if not target.startswith("/") or target.startswith("//"):
+                    target = url_for("index")
+                return redirect(target)
+            _register_failure()
+            error = "Incorrect password."
+    return render_template("login.html", title="Sign in", error=error, next=request.args.get("next", "")), (
+        401 if error else 200
+    )
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login" if auth_enabled() else "index"))
 
 
 def load_training_metadata() -> Dict[str, Any]:
@@ -435,6 +586,9 @@ def inject_globals() -> Dict[str, Any]:
         "training_metadata": metadata,
         "nav_history": history_rows(),
         "current_year": utcnow().year,
+        "csrf_token": csrf_token,
+        "auth_enabled": auth_enabled(),
+        "is_authenticated": is_authenticated,
     }
 
 

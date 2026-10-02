@@ -29,6 +29,9 @@
           <li class="nav-item"><a class="nav-link {% if title == 'Model Performance' %}active{% endif %}" href="{{ url_for('metrics') }}">Model Performance</a></li>
           <li class="nav-item"><a class="nav-link {% if title == 'Live Simulation' %}active{% endif %}" href="{{ url_for('live') }}">Live Simulation</a></li>
           <li class="nav-item"><a class="nav-link {% if title == 'About' %}active{% endif %}" href="{{ url_for('about') }}">About</a></li>
+          {% if auth_enabled and is_authenticated() %}
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Sign out</a></li>
+          {% endif %}
         </ul>
       </div>
     </div>

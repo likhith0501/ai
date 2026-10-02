@@ -13,6 +13,10 @@ services:
         value: "3.12.7"
       - key: CYBER_THREAT_SECRET_KEY
         generateValue: true
+      - key: CYBER_THREAT_PASSWORD
+        generateValue: true
+      - key: FORCE_SECURE_COOKIES
+        value: "1"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: MAX_UPLOAD_MB

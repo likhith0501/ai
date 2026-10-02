@@ -94,6 +94,9 @@
           <li>Only the <span class="mono">.csv</span> extension is accepted; other extensions are rejected</li>
           <li>Upload size is capped by <span class="mono">MAX_CONTENT_LENGTH</span> (413 error page on overflow)</li>
           <li>Flask secret key is read from the <span class="mono">CYBER_THREAT_SECRET_KEY</span> environment variable, never hard-coded</li>
+          <li>Authentication: set <span class="mono">CYBER_THREAT_PASSWORD</span> to require a session login; passwords are hashed, never stored in the database</li>
+          <li>CSRF token required on every state-changing request; cookies are HttpOnly, SameSite and optionally Secure</li>
+          <li>Login throttling after repeated failures from one client</li>
           <li>All database access goes through SQLAlchemy ORM queries (parameterised, no string-built SQL)</li>
           <li>Uploaded content is parsed as data only &mdash; never executed</li>
           <li>Errors are rendered as friendly pages instead of Python tracebacks</li>
