@@ -5,9 +5,9 @@
     <div>
       <h3 class="mb-1">&#9673; Live Traffic Simulation</h3>
       <div class="lead-muted">
-        Records from an analysed dataset are replayed one by one and classified with the trained model.
-        This is a <strong>simulation</strong> over stored flow records &mdash; no packets are captured
-        from the network and no offensive functionality is performed.
+        Replay an analysed dataset, or hit <strong>Start Live Scan</strong> to scan
+        threats without uploading anything first. All records are classified by the
+        trained model and rendered on the threat radar.
       </div>
     </div>
     <div class="panel panel-tight">
@@ -61,6 +61,9 @@
           <button class="btn btn-cyber btn-accent flex-fill" id="startBtn" {% if not uploads %}disabled{% endif %}>&#9654; Start</button>
           <button class="btn btn-cyber btn-ghost flex-fill" id="pauseBtn" disabled>&#10073;&#10073; Pause</button>
           <button class="btn btn-cyber btn-ghost" id="clearBtn">&#8635;</button>
+        </div>
+        <div class="d-flex gap-2 mt-2">
+          <button class="btn btn-cyber btn-outline flex-fill" id="liveScanBtn">&#128225; Start Live Scan</button>
         </div>
         <div class="row g-2 mt-3">
           <div class="col-4"><div class="panel panel-tight text-center"><div class="stat-label">Seen</div>

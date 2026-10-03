@@ -304,6 +304,7 @@
     const startBtn = document.getElementById("startBtn");
     const pauseBtn = document.getElementById("pauseBtn");
     const clearBtn = document.getElementById("clearBtn");
+    const liveScanBtn = document.getElementById("liveScanBtn");
     const select = document.getElementById("uploadSelect");
     const intervalRange = document.getElementById("intervalRange");
     const intervalValue = document.getElementById("intervalValue");
@@ -318,11 +319,20 @@
     }
 
     let timer = null;
+    let liveMode = false;
     const counters = { seen: 0, normal: 0, malicious: 0 };
 
     function setState(state) {
       stateLabel.textContent = state;
-      dot.className = state === "alert" ? "pulse-dot danger" : "pulse-dot";
+      if (state === "alert") {
+        dot.className = "pulse-dot danger";
+      } else if (state === "scanning") {
+        dot.className = "pulse-dot";
+        dot.style.background = "#a78bfa";
+      } else {
+        dot.className = "pulse-dot";
+        dot.style.background = "";
+      }
     }
 
     function resetCounters() {
@@ -373,16 +383,23 @@
     }
 
     async function tick() {
-      const uploadId = select ? select.value : "";
-      if (!uploadId) {
+      let uploadId = select ? select.value : "";
+      let endpoint = "";
+      if (liveMode) {
+        endpoint = "/api/simulation/live";
+      } else if (uploadId) {
+        endpoint = `/api/simulation/${uploadId}`;
+      }
+      if (!endpoint) {
         stop();
         setState("no dataset");
         return;
       }
       try {
-        const response = await fetch(`/api/simulation/${uploadId}?limit=1`);
+        const response = await fetch(`${endpoint}?limit=1`);
         if (!response.ok) {
-          throw new Error("simulation endpoint failed");
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || "simulation endpoint failed");
         }
         const data = await response.json();
         if (!data.records || !data.records.length) {
@@ -400,8 +417,13 @@
         clearInterval(timer);
         timer = null;
       }
+      liveMode = false;
       startBtn.disabled = false;
       pauseBtn.disabled = true;
+      if (liveScanBtn) {
+        liveScanBtn.disabled = false;
+        liveScanBtn.innerHTML = "&#128225; Start Live Scan";
+      }
       if (stateLabel.textContent !== "error") {
         setState("idle");
       }
@@ -411,6 +433,7 @@
       if (!select || !select.value) {
         return;
       }
+      liveMode = false;
       stop();
       const delay = intervalRange ? parseInt(intervalRange.value, 10) : 1200;
       tick();
@@ -419,8 +442,26 @@
       pauseBtn.disabled = false;
     }
 
+    function startLiveScan() {
+      liveMode = true;
+      stop();
+      const delay = intervalRange ? parseInt(intervalRange.value, 10) : 1200;
+      tick();
+      timer = setInterval(tick, delay);
+      startBtn.disabled = true;
+      pauseBtn.disabled = false;
+      if (liveScanBtn) {
+        liveScanBtn.disabled = true;
+        liveScanBtn.innerHTML = "&#128225; Scanning...";
+      }
+      setState("scanning");
+    }
+
     startBtn.addEventListener("click", start);
     pauseBtn.addEventListener("click", stop);
+    if (liveScanBtn) {
+      liveScanBtn.addEventListener("click", startLiveScan);
+    }
     if (clearBtn) {
       clearBtn.addEventListener("click", function () {
         stop();

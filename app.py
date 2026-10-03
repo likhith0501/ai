@@ -800,6 +800,64 @@ def api_predict():
         return jsonify({"error": f"Prediction failed: {exc}", "status": 500}), 500
 
 
+LIVE_SCAN_FRAME: Optional[pd.DataFrame] = None
+
+
+def _load_live_scan_frame() -> pd.DataFrame:
+    """Read, pre-process and score the sample dataset once for live-scan use."""
+    global LIVE_SCAN_FRAME
+    if LIVE_SCAN_FRAME is not None:
+        return LIVE_SCAN_FRAME
+    if not os.path.exists(SAMPLE_DATASET):
+        raise ModelNotAvailableError("No live-scan dataset available.")
+    predictor = get_predictor()
+    if not predictor.available:
+        raise ModelNotAvailableError(predictor.error or "Trained model unavailable.")
+    raw = pp.read_dataset(SAMPLE_DATASET)
+    canonical, _, _ = pp.canonicalize_columns(raw)
+    label_column = pp.find_label_column(canonical.columns)
+    canonical = pp.clean_frame(canonical, label_column)
+    canonical["Label_normalised"] = "unlabelled"
+    canonical = pp.add_engineered_features(canonical)
+    result = predictor.predict_frame(canonical)
+    LIVE_SCAN_FRAME = result.records_frame.copy()
+    return LIVE_SCAN_FRAME
+
+
+@app.route("/api/simulation/live")
+def api_simulation_live():
+    """Serve a random batch of scored records without requiring a prior analysis."""
+    try:
+        limit = max(1, min(int(request.args.get("limit", 8)), 100))
+    except (TypeError, ValueError):
+        limit = 8
+    try:
+        records = _load_live_scan_frame()
+    except ModelNotAvailableError as exc:
+        return jsonify({"error": str(exc), "records": []}), 503
+    batch = records.sample(min(limit, len(records))).to_dict(orient="records")
+    return jsonify(
+        {
+            "upload_id": None,
+            "filename": "live scan",
+            "total_records": len(records),
+            "records": [
+                {
+                    "source_ip": row.get("Source IP", "unknown"),
+                    "destination_ip": row.get("Destination IP", "unknown"),
+                    "protocol": row.get("Protocol", "unknown"),
+                    "packet_count": int(row.get("Packet Count", 0) or 0),
+                    "traffic_direction": row.get("Traffic Direction", "UNKNOWN"),
+                    "prediction": row.get("Prediction", "NORMAL"),
+                    "threat_probability": round(float(row.get("Threat Probability", 0)), 2),
+                    "attack_type": row.get("Attack Type", "n/a"),
+                }
+                for row in batch
+            ],
+        }
+    )
+
+
 @app.route("/api/simulation/<int:upload_id>")
 def api_simulation(upload_id: int):
     upload = db.session.get(Upload, upload_id)
