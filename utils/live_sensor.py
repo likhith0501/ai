@@ -216,24 +216,111 @@ class FlowAggregator:
 # ------------------------------------------------------------------ capture layer
 
 
+def _npcap_guid_map() -> Dict[str, str]:
+    """Map Npcap interface GUIDs (``NPF_{...}``) to their Windows adapter names.
+
+    ``Get-NetAdapter`` is preferred because it reports the GUID next to the
+    friendly name; the registry is used as a fallback when the cmdlet is
+    unavailable (older Windows, restricted PowerShell).
+    """
+    mapping: Dict[str, str] = {}
+    if os.name != "nt":
+        return mapping
+
+    try:
+        output = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-NetAdapter | ForEach-Object { \"$($_.InterfaceGuid)|$($_.Name)\" }"],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            guid, _, name = line.partition("|")
+            guid = guid.strip().strip("{}").lower()
+            name = name.strip()
+            if guid and name:
+                mapping[guid] = name
+    except Exception:  # noqa: BLE001 - fall through to the registry
+        mapping = {}
+
+    if mapping:
+        return mapping
+
+    import winreg  # noqa: PLC0415
+
+    base = r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
+    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base)
+    with key:
+        index = 0
+        while True:
+            try:
+                sub = winreg.EnumKey(key, index)
+            except OSError:
+                break
+            index += 1
+            try:
+                with winreg.OpenKey(key, sub + r"\Connection") as connection:
+                    name, _ = winreg.QueryValueEx(connection, "Name")
+                    mapping[sub.strip("{}").lower()] = str(name)
+            except OSError:
+                continue
+    return mapping
+
+
+def _npcap_key(raw_name: str) -> str:
+    """Extract the bare GUID from a scapy interface name such as ``NPF_{GUID}``."""
+    text = raw_name.split("\\")[-1].strip().rstrip("}")
+    if text.upper().startswith("NPF_"):
+        text = text[4:]
+    return text.strip("{}").lower()
+
+
+def _windows_adapters() -> List[Dict[str, str]]:
+    """Return Windows adapters with their name, GUID and connection state."""
+    adapters: List[Dict[str, str]] = []
+    try:
+        output = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-NetAdapter | ForEach-Object { "
+             "\"$($_.InterfaceGuid)|$($_.Name)|$($_.Status)\" }"],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        return adapters
+    for line in output.splitlines():
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        guid, name, status = (part.strip() for part in parts[:3])
+        if not name:
+            continue
+        adapters.append({
+            "name": name,
+            "guid": guid.strip("{}").lower(),
+            "status": status,
+            "os": "windows",
+        })
+    return adapters
+
+
 def list_interfaces() -> List[Dict[str, str]]:
     """Return the interfaces the operating system reports as usable."""
     interfaces: List[Dict[str, str]] = []
-    system = os.name == "nt"
-    try:
-        if system:
-            output = subprocess.run(["netsh", "interface", "show", "interface"], capture_output=True,
-                                    text=True, timeout=20).stdout
-            seen = set()
-            for line in output.splitlines():
-                if "Connected" not in line:
-                    continue
-                parts = line.split()
-                name = parts[-1].strip()
-                if name and name.lower() not in seen:
-                    seen.add(name.lower())
-                    interfaces.append({"name": name, "os": "windows"})
-        else:
+
+    if os.name == "nt":
+        adapters = _windows_adapters()
+        guid_to_scapy: Dict[str, str] = {}
+        for adapter in adapters:
+            interfaces.append({
+                "name": adapter["name"],
+                "os": "windows",
+                "scapy_name": f"NPF_{adapter['guid']}",
+                "status": adapter["status"],
+            })
+            guid_to_scapy[adapter["guid"]] = f"NPF_{adapter['guid']}"
+    else:
+        try:
             output = subprocess.run(["ip", "-o", "link", "show"], capture_output=True,
                                     text=True, timeout=20).stdout
             for line in output.splitlines():
@@ -242,36 +329,124 @@ def list_interfaces() -> List[Dict[str, str]]:
                 name = line.split(":")[1].strip().split("@")[0]
                 if name:
                     interfaces.append({"name": name, "os": "linux"})
-    except Exception:  # noqa: BLE001 - fall back to scapy below
-        interfaces = []
+        except Exception:  # noqa: BLE001
+            pass
+        guid_to_scapy = {}
 
     try:
         from scapy.all import get_if_list  # noqa: PLC0415
 
         known = {item["name"] for item in interfaces}
-        for name in get_if_list():
-            if os.name != "nt" and name in known:
-                continue
-            display = name.split("\\")[-1].rstrip("}")
-            if display and display not in {item["name"] for item in interfaces}:
-                interfaces.append({"name": display, "os": "raw-socket"})
+        for raw in get_if_list():
+            if os.name != "nt":
+                if raw in known:
+                    continue
+                display = raw
+            else:
+                guid = _npcap_key(raw)
+                display = guid_to_scapy.get(guid, "").replace("NPF_", "")
+                if not display:
+                    # GUID with no matching adapter: keep the raw form, it is still valid
+                    display = raw
+            if display and display not in known:
+                known.add(display)
+                interfaces.append({"name": display, "os": "raw-socket", "scapy_name": raw})
     except Exception:  # noqa: BLE001 - scapy optional
         pass
     return interfaces
 
 
-def _capture_guidance() -> str:
+def resolve_interface(name: str) -> str:
+    """Translate a friendly adapter name into the identifier scapy expects.
+
+    On Windows scapy reports Npcap GUIDs, so a user-supplied name such as
+    ``Wi-Fi`` or ``Ethernet 3`` is matched back to the raw ``NPF_{...}`` string.
+    """
+    if os.name != "nt":
+        return name
+    if name.upper().startswith("NPF_") or name.upper().startswith("NPF{"):
+        return name
+    wanted = name.strip().lower()
+    for item in list_interfaces():
+        if item["name"].lower() == wanted:
+            return item.get("scapy_name", item["name"])
+    return name
+    if name.upper().startswith("NPF_") or name.upper().startswith("NPF{"):
+        return name
+    wanted = name.strip().lower()
+    for item in list_interfaces():
+        if item["name"].lower() == wanted:
+            return item.get("scapy_name", item["name"])
+    return name
+
+
+def is_elevated() -> bool:
+    """Return ``True`` when the process can open a raw capture socket."""
+    if os.name != "nt":
+        return os.geteuid() == 0
+    try:
+        import ctypes  # noqa: PLC0415
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:  # noqa: BLE001 - non-fatal, assume not elevated
+        return False
+
+
+def npcap_installed() -> bool:
+    """Detect the Npcap/WinPcap driver without importing a capture library."""
+    if os.name != "nt":
+        return True
+    for name in ("Npcap", "wpcap"):
+        if os.path.exists(os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", name + ".dll")):
+            return True
+    return False
+
+
+def scapy_installed() -> bool:
+    try:
+        import scapy  # noqa: F401, PLC0415
+
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def check_prerequisites() -> List[Dict[str, Any]]:
+    """Return the status of every live-capture requirement, in setup order."""
+    checks = [
+        {"name": "scapy installed", "ok": scapy_installed(),
+         "fix": "pip install scapy"},
+    ]
     if os.name == "nt":
-        return (
-            "Live capture needs the Npcap driver and administrator rights.\n"
-            "  1. Install Npcap from https://npcap.com (keep 'WinPcap API-compatible mode' enabled).\n"
-            "  2. Re-open the terminal with 'Run as administrator'.\n"
-            "  3. Restart the machine if Windows asks for it."
-        )
-    return (
-        "Live capture needs CAP_NET_RAW.\n"
-        "  Run with sudo, or grant the capability: sudo setcap cap_net_raw,cap_net_admin=eip $(which python)"
-    )
+        checks.append({
+            "name": "Npcap driver installed", "ok": npcap_installed(),
+            "fix": "install Npcap from https://npcap.com and keep "
+                   "'WinPcap API-compatible mode' enabled",
+        })
+        checks.append({
+            "name": "terminal running as Administrator", "ok": is_elevated(),
+            "fix": "close the terminal and re-open it with 'Run as administrator'",
+        })
+    else:
+        checks.append({
+            "name": "CAP_NET_RAW (root or capability)", "ok": is_elevated(),
+            "fix": "run with sudo, or grant the capability: "
+                   "sudo setcap cap_net_raw,cap_net_admin=eip $(which python)",
+        })
+    return checks
+
+
+def _capture_guidance() -> str:
+    """Explain exactly which prerequisite is unmet."""
+    missing = [check for check in check_prerequisites() if not check["ok"]]
+    if not missing:
+        return "capture prerequisites are satisfied"
+    lines = [f"Live capture is unavailable ({len(missing)} unmet requirement"
+             f"{'s' if len(missing) > 1 else ''}):", ""]
+    lines.extend(f"  [ ] {check['name']}\n      -> {check['fix']}" for check in missing)
+    if os.name == "nt":
+        lines.append("\n  3. Restart Windows if the Npcap installer asks for it.")
+    return "\n".join(lines)
 
 
 def _extract(packet) -> Optional[Dict[str, Any]]:
@@ -344,7 +519,7 @@ class FlowSensor:
 
         conf.use_pcap = False
         try:
-            self._sniffer = sniffer_class(iface=self.interface, store=False, prn=handler)
+            self._sniffer = sniffer_class(iface=resolve_interface(self.interface), store=False, prn=handler)
             self._sniffer.start()
             self._sniffer.join(2.0)
             if not getattr(self._sniffer, "running", False):
@@ -493,7 +668,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--api", help="POST flow records to a running dashboard, e.g. "
                                      "http://127.0.0.1:5000/api/sensor/sample")
     parser.add_argument("--list-interfaces", action="store_true", help="List capture interfaces and exit.")
+    parser.add_argument("--check", action="store_true",
+                        help="Report whether live capture can run here, and exit.")
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.check:
+        print(_capture_guidance())
+        return 0 if all(check["ok"] for check in check_prerequisites()) else 1
 
     if args.list_interfaces:
         for item in list_interfaces():
