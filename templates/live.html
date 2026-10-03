@@ -20,7 +20,23 @@
   </div>
 
   <div class="row g-3 mt-1">
-    <div class="col-lg-4">
+    <div class="col-lg-5">
+      <div class="panel mb-3">
+        <div class="section-title mb-2">&#128225; Threat Radar</div>
+        <div class="radar-wrap">
+          <canvas id="radarCanvas" width="420" height="420"></canvas>
+          <div class="radar-overlay">
+            <div class="radar-ring-label">LAN</div>
+            <div class="radar-ring-label">WAN</div>
+            <div class="radar-center-dot"></div>
+          </div>
+          <div class="radar-stats">
+            <div><span class="radar-stat-label">Pkts/s</span><br><strong id="radarPps">0</strong></div>
+            <div><span class="radar-stat-label">Threats</span><br><strong id="radarThreats" class="text-danger">0</strong></div>
+            <div><span class="radar-stat-label">Coverage</span><br><strong id="radarCoverage">0%</strong></div>
+          </div>
+        </div>
+      </div>
       <div class="panel">
         <div class="section-title mb-3">&#128225; Controls</div>
         <div class="mb-3">
@@ -83,7 +99,7 @@
       </details>
     </div>
 
-    <div class="col-lg-8">
+    <div class="col-lg-7">
       <div class="panel">
         <div class="section-title mb-3">&#128225; Incoming traffic records</div>
         <div class="table-responsive" style="max-height: 560px; overflow-y: auto;">

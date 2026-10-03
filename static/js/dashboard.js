@@ -366,6 +366,10 @@
       statNormal.textContent = counters.normal;
       statMalicious.textContent = counters.malicious;
       setState(malicious ? "alert" : "monitoring");
+
+      if (window.radarPush) {
+        window.radarPush(record);
+      }
     }
 
     async function tick() {
@@ -423,6 +427,9 @@
         streamBody.innerHTML =
           '<tr id="placeholder"><td colspan="8" class="text-secondary">Press Start to begin the simulation.</td></tr>';
         resetCounters();
+        if (window.resetRadar) {
+          window.resetRadar();
+        }
       });
     }
     if (intervalRange && intervalValue) {
@@ -438,10 +445,208 @@
   document.addEventListener("DOMContentLoaded", function () {
     renderCharts();
     if (window.initUploadDropZone && document.getElementById("dropZone")) {
-      window.initUploadDropZone();
+      initUploadDropZone();
     }
     if (window.initLiveSimulation && document.getElementById("streamBody")) {
-      window.initLiveSimulation();
+      initLiveSimulation();
+    }
+    if (window.initRadar && document.getElementById("radarCanvas")) {
+      initRadar();
     }
   });
+
+  window.initRadar = function () {
+    const canvas = document.getElementById("radarCanvas");
+    if (!canvas) {
+      return;
+    }
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const displayWidth = 420;
+    const displayHeight = 420;
+    canvas.width = displayWidth * dpr;
+    canvas.height = displayHeight * dpr;
+    canvas.style.width = displayWidth + "px";
+    canvas.style.height = displayHeight + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const cx = displayWidth / 2;
+    const cy = displayHeight / 2;
+    const maxRadius = 190;
+    const ringStep = maxRadius / 3;
+
+    let sweepAngle = 0;
+    const sweepSpeed = (2 * Math.PI) / 3.2;
+    const blips = [];
+    const maxBlips = 80;
+    let threats = 0;
+    let uniqueIps = new Set();
+    let packetsThisSecond = 0;
+    let lastSecond = Math.floor(Date.now() / 1000);
+
+    function ipHash(ip) {
+      let hash = 0;
+      const text = String(ip || "0.0.0.0");
+      for (let i = 0; i < text.length; i++) {
+        hash = ((hash << 5) - hash) + text.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash);
+    }
+
+    function ipAngle(ip) {
+      return ((ipHash(ip) % 360) * Math.PI) / 180;
+    }
+
+    function ipRadius(packetCount, malicious) {
+      const base = Math.log10(Math.max(parseInt(packetCount, 10) || 1, 1)) / 4;
+      const r = 30 + Math.min(base, 1) * (maxRadius - 35);
+      return Math.max(20, Math.min(r, maxRadius - 10));
+    }
+
+    function pushBlip(record) {
+      const malicious = record.prediction === "MALICIOUS";
+      const angle = ipAngle(record.source_ip);
+      const radius = ipRadius(record.packet_count, malicious);
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+      blips.push({
+        x,
+        y,
+        color: malicious ? "#f43f5e" : "#22d3ee",
+        born: Date.now(),
+        life: malicious ? 3500 : 2200,
+        maxLife: malicious ? 3500 : 2200,
+        radius: malicious ? 3.2 : 2.2,
+        malicious,
+      });
+      packetsThisSecond += 1;
+      uniqueIps.add(record.source_ip);
+      if (malicious) {
+        threats += 1;
+      }
+      while (blips.length > maxBlips) {
+        blips.shift();
+      }
+    }
+
+    function drawGrid() {
+      ctx.strokeStyle = "rgba(148,163,184,0.14)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i <= 3; i++) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringStep * i, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(a) * maxRadius, cy + Math.sin(a) * maxRadius);
+        ctx.stroke();
+      }
+    }
+
+    function drawSweep() {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(sweepAngle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(maxRadius, 0);
+      ctx.strokeStyle = "rgba(34,211,238,0.75)";
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.restore();
+
+      const grad = ctx.createConicGradient
+        ? ctx.createConicGradient(sweepAngle, cx, cy)
+        : ctx.createLinearGradient(cx, cy, cx + Math.cos(sweepAngle) * maxRadius, cy + Math.sin(sweepAngle) * maxRadius);
+      if (grad.addColorStop) {
+        grad.addColorStop(0, "rgba(34,211,238,0.28)");
+        grad.addColorStop(0.12, "rgba(34,211,238,0.08)");
+        grad.addColorStop(0.25, "rgba(34,211,238,0)");
+        grad.addColorStop(1, "rgba(34,211,238,0)");
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, maxRadius, sweepAngle - 0.55, sweepAngle, false);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawBlips() {
+      const now = Date.now();
+      for (let i = blips.length - 1; i >= 0; i--) {
+        const blip = blips[i];
+        const age = now - blip.born;
+        if (age > blip.life) {
+          blips.splice(i, 1);
+          continue;
+        }
+        const alpha = 1 - age / blip.life;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(blip.x, blip.y, blip.radius, 0, Math.PI * 2);
+        ctx.fillStyle = blip.color;
+        ctx.shadowColor = blip.color;
+        ctx.shadowBlur = blip.malicious ? 14 : 8;
+        ctx.fill();
+        if (blip.malicious) {
+          ctx.beginPath();
+          ctx.arc(blip.x, blip.y, blip.radius + 4 + Math.sin(now / 120) * 2, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(244,63,94,0.35)";
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    function updateStats() {
+      const now = Math.floor(Date.now() / 1000);
+      if (now !== lastSecond) {
+        const pps = document.getElementById("radarPps");
+        const threatsEl = document.getElementById("radarThreats");
+        const coverageEl = document.getElementById("radarCoverage");
+        if (pps) pps.textContent = packetsThisSecond;
+        if (threatsEl) threatsEl.textContent = threats;
+        if (coverageEl) coverageEl.textContent = Math.min(100, uniqueIps.size * 7) + "%";
+        packetsThisSecond = 0;
+        lastSecond = now;
+      }
+    }
+
+    function frame() {
+      ctx.clearRect(0, 0, displayWidth, displayHeight);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, maxRadius, 0, Math.PI * 2);
+      ctx.clip();
+      drawGrid();
+      drawSweep();
+      drawBlips();
+      ctx.restore();
+      sweepAngle += sweepSpeed * 0.016;
+      if (sweepAngle > Math.PI * 2) {
+        sweepAngle -= Math.PI * 2;
+      }
+      updateStats();
+      requestAnimationFrame(frame);
+    }
+
+    frame();
+
+    window.radarPush = pushBlip;
+    window.resetRadar = function () {
+      blips.length = 0;
+      threats = 0;
+      uniqueIps = new Set();
+      packetsThisSecond = 0;
+    };
+  };
 })();
